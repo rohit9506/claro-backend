@@ -135,11 +135,13 @@ async def consumer_scan(
     front_image: Optional[UploadFile] = File(None),
     back_image: Optional[UploadFile] = File(None),
     side_image: Optional[UploadFile] = File(None),
+    right_image: Optional[UploadFile] = File(None),
+    left_image: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),  # Backward compatibility
     db: Session = Depends(get_db)
 ):
     """
-    Consumer scanning - supports 3-sided photo capture (Front, Back, Side) or single capture.
+    Consumer scanning - supports 4-sided photo capture (Front, Back, Right Side, Left Side) or single capture.
     Performs multi-signal product identification (Barcode, Catalog visual match, OCR text match)
     and field extraction.
     """
@@ -171,8 +173,12 @@ async def consumer_scan(
     await save_and_ocr("front", front_image)
     if back_image:
         await save_and_ocr("back", back_image)
-    if side_image:
+    if right_image:
+        await save_and_ocr("right_side", right_image)
+    elif side_image:
         await save_and_ocr("side", side_image)
+    if left_image:
+        await save_and_ocr("left_side", left_image)
 
     # Multi-Signal Product Identification
     prod_ident = identify_product_multi_signal(
