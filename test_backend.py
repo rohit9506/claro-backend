@@ -56,7 +56,7 @@ def test_user_registration_and_verification_flow():
         "confirm_password": "Consumer@2026!SecurePass",
         "mobile_number": "9876543210"
     }
-    # Register
+    # Register directly without email verification
     res = client.post("/auth/register", json=reg_payload)
     if res.status_code == 400 and "already taken" in res.text:
         pass # Already created
@@ -64,23 +64,17 @@ def test_user_registration_and_verification_flow():
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        token = data.get("demo_verification_token")
-        assert token is not None
+        assert "Account created successfully" in data["message"]
 
-        # Verify email
-        v_res = client.post("/auth/verify-email", json={"token": token})
-        assert v_res.status_code == 200
-        assert v_res.json()["success"] is True
-
-        # Now login should succeed
-        login_res = client.post("/auth/login", json={
-            "username_or_email": "pooja_sharma",
-            "password": "Consumer@2026!SecurePass"
-        })
-        assert login_res.status_code == 200
-        token_data = login_res.json()
-        assert "access_token" in token_data
-        assert token_data["user"]["role"] == "ROLE_USER"
+    # Now login directly succeeds
+    login_res = client.post("/auth/login", json={
+        "username_or_email": "pooja_sharma",
+        "password": "Consumer@2026!SecurePass"
+    })
+    assert login_res.status_code == 200
+    token_data = login_res.json()
+    assert "access_token" in token_data
+    assert token_data["user"]["role"] == "ROLE_USER"
 
 def test_rbac_enforcement():
     # Login as User

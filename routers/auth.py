@@ -108,11 +108,7 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == normalized_email).first():
         raise HTTPException(status_code=400, detail="An account with this email address is already registered.")
 
-    # Generate single-use verification token
-    raw_token, token_hash = generate_secure_token()
-    token_expires = utc_now() + datetime.timedelta(minutes=EMAIL_VERIFY_EXPIRE_MINUTES)
-
-    # Create unverified user
+    # Create directly verified & active user
     user = User(
         full_name=req.full_name.strip(),
         username=clean_username,
@@ -122,9 +118,10 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
         mobile_number=req.mobile_number.strip() if req.mobile_number else None,
         is_active=True,
         is_temporary_password=False,
-        email_verified=False,
-        verification_token_hash=token_hash,
-        verification_token_expires_at=token_expires
+        email_verified=True,
+        email_verified_at=utc_now(),
+        verification_token_hash=None,
+        verification_token_expires_at=None
     )
     db.add(user)
     db.commit()
@@ -138,10 +135,9 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
 
     return {
         "success": True,
-        "message": "Registration successful. Please verify your email address to activate your account.",
-        "email": normalized_email,
-        # Provided so user can click 'Verify Now' in local/demo environment without SMTP server
-        "demo_verification_token": raw_token
+        "message": "Account created successfully! You can now log in with your credentials.",
+        "username": clean_username,
+        "email": normalized_email
     }
 
 # 4. Email Verification
@@ -244,12 +240,11 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             detail="Your account has been deactivated. Please contact an administrator."
         )
 
-    # Enforce email verification for consumers
+    # Auto-verify consumer accounts
     if user.role == "ROLE_USER" and not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your email address has not been verified yet. Please check your inbox or resend verification."
-        )
+        user.email_verified = True
+        user.email_verified_at = utc_now()
+        db.commit()
 
     # Update last login
     user.last_login_at = utc_now()
