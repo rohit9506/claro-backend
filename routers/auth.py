@@ -93,27 +93,38 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
     is_valid_email, email_or_err = validate_email_address(req.email)
     if not is_valid_email:
         raise HTTPException(status_code=400, detail=f"Invalid email address: {email_or_err}")
-    normalized_email = email_or_err
+    normalized_email = email_or_err.strip().lower()
 
     # Validate strong password
     pwd_eval = evaluate_password_strength(req.password)
     if not pwd_eval["is_valid"]:
         raise HTTPException(status_code=400, detail=pwd_eval["errors"][0])
 
-    # Check uniqueness
+    from sqlalchemy import func
     clean_username = req.username.strip().lower()
-    if db.query(User).filter(User.username == clean_username).first():
-        raise HTTPException(status_code=400, detail="This username is already taken. Please choose another.")
-    
-    if db.query(User).filter(User.email == normalized_email).first():
-        raise HTTPException(status_code=400, detail="An account with this email address is already registered.")
+
+    # Check if email is already registered (Strictly block duplicate registration with same email)
+    existing_user_by_email = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    if existing_user_by_email:
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email address is already registered. Please sign in or use a different email."
+        )
+
+    # Check if username is already taken
+    existing_user_by_username = db.query(User).filter(func.lower(User.username) == clean_username).first()
+    if existing_user_by_username:
+        raise HTTPException(
+            status_code=400,
+            detail="This username is already taken. Please choose another username."
+        )
 
     # Create directly verified & active user
     user = User(
         full_name=req.full_name.strip(),
         username=clean_username,
         email=normalized_email,
-        password_hash=hash_password(req.password),
+        password_hash=hash_password(req.password.strip()),
         role="ROLE_USER",  # Always ROLE_USER
         mobile_number=req.mobile_number.strip() if req.mobile_number else None,
         is_active=True,
@@ -205,7 +216,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
     generic_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid email/username or password."
+        detail="Invalid email/username or password. If you haven't registered yet, please create an account."
     )
 
     if not user:

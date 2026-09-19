@@ -58,7 +58,7 @@ def test_user_registration_and_verification_flow():
     }
     # Register directly without email verification
     res = client.post("/auth/register", json=reg_payload)
-    if res.status_code == 400 and "already taken" in res.text:
+    if res.status_code == 400 and ("already taken" in res.text or "already registered" in res.text):
         pass # Already created
     else:
         assert res.status_code == 200

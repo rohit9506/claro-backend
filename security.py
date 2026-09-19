@@ -76,17 +76,20 @@ def evaluate_password_strength(password: str) -> dict:
     """
     errors = []
     
-    if len(password) < 12:
-        errors.append("Password must be at least 12 characters long (15+ characters recommended).")
+    if len(password) < 8:
+        errors.append("Password must be at least 8 characters long.")
     
-    low = password.lower()
-    if low in COMMON_PASSWORDS or any(c in low for c in ["password", "123456", "admin123", "qwertyuiop"]):
+    low = password.lower().strip()
+    if low in COMMON_PASSWORDS or any(c in low for c in ["password123", "12345678", "qwertyuiop", "admin1234"]):
         errors.append("This password contains common dictionary terms or predictable patterns. Please choose a more secure passphrase.")
         
     has_upper = bool(re.search(r"[A-Z]", password))
     has_lower = bool(re.search(r"[a-z]", password))
     has_digit = bool(re.search(r"\d", password))
     has_special = bool(re.search(r"[!@#$%^&*(),.?\":{}|<>]", password))
+
+    if not (has_upper or has_special) and len(password) < 12:
+        errors.append("Password should include an uppercase letter or special symbol.")
     
     score = 0
     if len(password) >= 12: score += 1
