@@ -54,6 +54,14 @@ class ResetPasswordRequest(BaseModel):
 class PasswordCheckRequest(BaseModel):
     password: str
 
+class VerifyGmailRequest(BaseModel):
+    email: str
+
+class DirectResetPasswordRequest(BaseModel):
+    email: str
+    new_password: str
+    confirm_password: str
+
 # 1. First-Time Setup Status
 @router.get("/setup-status")
 def get_setup_status():
@@ -363,6 +371,62 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     )
 
     return {"success": True, "message": "Your password has been reset successfully. You can now log in."}
+
+# 9b. Verify Gmail / Email Exists (Direct Forgot Password Flow)
+@router.post("/verify-gmail")
+def verify_gmail(req: VerifyGmailRequest, db: Session = Depends(get_db)):
+    email_clean = req.email.strip().lower()
+    from sqlalchemy import func
+    user = db.query(User).filter(func.lower(User.email) == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Gmail address not found. Please enter the Gmail address registered with your account."
+        )
+    return {
+        "success": True,
+        "exists": True,
+        "email": email_clean,
+        "message": "Gmail address verified."
+    }
+
+# 9c. Direct Reset Password (No email link required)
+@router.post("/reset-password-direct")
+def reset_password_direct(req: DirectResetPasswordRequest, db: Session = Depends(get_db)):
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    email_clean = req.email.strip().lower()
+    from sqlalchemy import func
+    user = db.query(User).filter(func.lower(User.email) == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Gmail address not found. Please enter the Gmail address registered with your account."
+        )
+
+    pwd_eval = evaluate_password_strength(req.new_password)
+    if not pwd_eval["is_valid"]:
+        raise HTTPException(status_code=400, detail=pwd_eval["errors"][0])
+
+    user.password_hash = hash_password(req.new_password.strip())
+    user.is_temporary_password = False
+    user.password_reset_token_hash = None
+    user.password_reset_token_expires_at = None
+    user.updated_at = utc_now()
+    db.commit()
+
+    log_audit(
+        db, actor_id=user.id, actor_name=user.full_name, actor_role=user.role,
+        action="PASSWORD_RESET_DIRECT", target_type="USER", target_id=str(user.id),
+        details={"email": email_clean}
+    )
+
+    return {
+        "success": True,
+        "message": "Password reset successfully. Please login with your new password."
+    }
+
 
 # 10. Get Current Profile
 @router.get("/me")
