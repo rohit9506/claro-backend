@@ -138,35 +138,43 @@ class OCRService:
 
         base_score = self._score_detections(base_dets)
 
-        # Fast exit if 0 deg has rich, confident packaging text
-        if base_score >= 20.0 and len(base_dets) >= 8:
+        # Fast exit: if 0 deg already has clear packaging text or statutory tokens, return immediately
+        if (base_score >= 10.0 and len(base_dets) >= 3) or base_score >= 15.0 or len(base_dets) >= 6:
             return base_dets
 
-        # 2. Check 90 deg clockwise (if image was left-rotated), 270 deg (if right-rotated), and 180 deg
-        best_dets = base_dets
-        best_score = base_score
+        # 2. Fast Thumbnail Orientation Check for sideways or inverted images
+        # Evaluates candidate rotations (90°, 270°, 180°) on a downscaled 380px thumbnail in ~0.04s
+        h, w = img.shape[:2]
+        thumb_scale = 380.0 / max(h, w)
+        thumb_img = cv2.resize(img, (int(w * thumb_scale), int(h * thumb_scale)), interpolation=cv2.INTER_AREA)
+        
+        best_thumb_score = self._score_detections(self._ocr_numpy(thumb_img))
         best_angle = 0
-        best_img = img
+        rot_flags = {
+            90: cv2.ROTATE_90_CLOCKWISE,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+            180: cv2.ROTATE_180
+        }
 
-        rotations = [
-            (90, cv2.ROTATE_90_CLOCKWISE),
-            (270, cv2.ROTATE_90_COUNTERCLOCKWISE),
-            (180, cv2.ROTATE_180)
-        ]
-
-        for angle, rot_flag in rotations:
-            r_img = cv2.rotate(img, rot_flag)
-            cand_dets = self._ocr_numpy(r_img)
-            cand_score = self._score_detections(cand_dets)
-            if cand_score > best_score * 1.25 and cand_score > best_score + 3.0:
-                best_score = cand_score
-                best_dets = cand_dets
+        for angle in [90, 270, 180]:
+            r_thumb = cv2.rotate(thumb_img, rot_flags[angle])
+            cand_thumb_dets = self._ocr_numpy(r_thumb)
+            cand_thumb_score = self._score_detections(cand_thumb_dets)
+            if cand_thumb_score > best_thumb_score * 1.3 and cand_thumb_score >= best_thumb_score + 2.5:
+                best_thumb_score = cand_thumb_score
                 best_angle = angle
-                best_img = r_img
 
-        # If a non-zero rotation was chosen as significantly better, overwrite disk file so
-        # previews, evidence crops, and PDF reports display the package upright
-        if best_angle != 0 and loaded_from_disk_path is not None:
+        # If 0° is best or rotation showed no significant improvement, keep base detections
+        if best_angle == 0:
+            return base_dets
+
+        # 3. Exactly ONE full-res OCR pass on the winning rotation
+        best_rot_flag = rot_flags[best_angle]
+        best_img = cv2.rotate(img, best_rot_flag)
+        best_dets = self._ocr_numpy(best_img)
+
+        # Overwrite disk file so previews, evidence crops, and PDF reports display upright packaging
+        if loaded_from_disk_path is not None:
             try:
                 cv2.imwrite(loaded_from_disk_path, best_img)
             except Exception as write_err:
