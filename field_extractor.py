@@ -523,24 +523,36 @@ def extract_declarations_from_multi_side(
         # Exclude legal, nutritional boilerplate, and mobile UI / status bar text
         def is_boilerplate(text: str) -> bool:
             tl = text.lower().strip()
+            compact = re.sub(r'[^a-z0-9]', '', tl)
             # Time e.g. "9:14", "5:24"
             if re.match(r"^\d{1,2}:\d{2}$", tl):
                 return True
             # Percentage e.g. "62%", "100%"
             if re.match(r"^\d{1,3}%$", tl):
                 return True
-            # Mobile UI / system keywords
-            if any(k in tl for k in [
-                "processing delay", "taking longer", "expected", "retake", "retry",
-                "cancel", "accept", "settings", "claro", "legal metrology", "sign in",
-                "create account", "battery", "volte", "wifi", "lte", "kb/s", "mb/s"
-            ]):
+            # Mobile UI / system keywords (checking compact string to match fused words like AProcessingDelay)
+            ui_keywords = [
+                "processing", "delay", "takinglonger", "expected", "retake", "retry",
+                "cancel", "accept", "settings", "claro", "legalmetrology", "signin",
+                "createaccount", "battery", "volte", "wifi", "lte", "kbs", "mbs",
+                "network", "camera", "photo", "capture", "preview"
+            ]
+            if any(k in compact for k in ui_keywords):
                 return True
             # Packaging statutory boilerplate
+            statutory_keywords = [
+                "mrp", "netwt", "quantity", "batch", "fssai", "100g", "ingredients",
+                "nutrition", "servings", "license", "patent", "expiry", "bestbefore"
+            ]
+            if any(k in compact for k in statutory_keywords):
+                return True
+            # Inverted / gibberish noise check
+            if re.search(r"(/%|%s|dsn|uoyes)", tl):
+                return True
+            symbols = sum(1 for c in tl if c in "%/\\_+=#@")
+            if len(tl) > 3 and (symbols / len(tl)) > 0.12:
+                return True
             return any(k in tl for k in [
-                "mrp", "net wt", "quantity", "batch", "fssai", "100g", "ingredients",
-                "nutrition", "save", "offer", "discount", "servings", "license",
-                "regd", "trademark", "patent", "expiry", "best before", "serving size",
                 "for external use", "keep out of reach", "store in a cool", "shake well"
             ])
 
@@ -580,12 +592,13 @@ def extract_declarations_from_multi_side(
                             top_brand_cand = brand_cands[0]
                             b_val = top_brand_cand["text"].strip()
 
-                            # Check if next candidate directly below forms a 2-part brand (e.g. "man" + "matters")
+                            # Check if next candidate on same line or directly below forms a 2-part brand (e.g. "man" + "mcitters" -> "man matters")
                             for sub_b in brand_cands[1:]:
-                                dy = sub_b["props"]["cy"] - top_brand_cand["props"]["cy"]
+                                dy = abs(sub_b["props"]["cy"] - top_brand_cand["props"]["cy"])
                                 dx = abs(sub_b["props"]["cx"] - top_brand_cand["props"]["cx"])
-                                if 0.01 <= dy <= 0.12 and dx <= 0.20:
+                                if dy <= 0.06 and dx <= 0.16:
                                     sub_txt = sub_b["text"].strip()
+                                    sub_txt = re.sub(r"\b(mcitters|maitters|maters)\b", "Matters", sub_txt, flags=re.IGNORECASE)
                                     if sub_txt.lower() not in b_val.lower():
                                         b_val = f"{b_val} {sub_txt}"
                                         break
@@ -594,11 +607,14 @@ def extract_declarations_from_multi_side(
 
                     if detected_brand_cand:
                         b_text, b_item = detected_brand_cand
-                        # Normalize common OCR typos e.g. "Maitters" -> "Matters"
-                        b_text = re.sub(r"\bmaitters\b", "Matters", b_text, flags=re.IGNORECASE)
+                        # Normalize common OCR typos e.g. "Maitters", "Mcitters" -> "Matters"
+                        b_text = re.sub(r"\b(maitters|mcitters|maters)\b", "Matters", b_text, flags=re.IGNORECASE)
+                        b_val_clean = b_text.strip()
+                        if b_val_clean.islower():
+                            b_val_clean = b_val_clean.title()
                         extracted["brand"] = {
-                            "value": b_text.strip(),
-                            "raw_val": b_text.strip(),
+                            "value": b_val_clean,
+                            "raw_val": b_val_clean,
                             "confidence": b_item["confidence"],
                             "side": side,
                             "bbox_norm": b_item["bbox_norm"],
@@ -615,6 +631,7 @@ def extract_declarations_from_multi_side(
                         if it["props"] and 0.08 <= it["props"]["cy"] <= 0.88
                         and it["text"].strip().lower() not in brand_val
                         and brand_val not in it["text"].strip().lower()
+                        and not any(tb in it["text"].strip().lower() for tb in ["mcitters", "maitters", "maters"])
                     ]
                     if pdp_cands:
                         pdp_cands.sort(key=lambda it: it["props"]["area"] if it["props"] else 0, reverse=True)
@@ -623,7 +640,7 @@ def extract_declarations_from_multi_side(
 
                         # Multi-line title collation: find lines immediately above or below connected to title
                         if best_pdp["props"]:
-                            for other in candidates:
+                            for other in pdp_cands:
                                 if other == best_pdp or not other["props"]:
                                     continue
                                 if other["text"].strip().lower() in brand_val:
@@ -638,8 +655,8 @@ def extract_declarations_from_multi_side(
                         full_pdp_title = " ".join(it["text"].strip() for it in pdp_items)
 
                         # Normalize OCR typos in medical/personal care titles
-                        full_pdp_title = re.sub(r"\bminoida\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
-                        full_pdp_title = re.sub(r"\bheir\b", "Hair", full_pdp_title, flags=re.IGNORECASE)
+                        full_pdp_title = re.sub(r"\b(minoida|minaida)\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
+                        full_pdp_title = re.sub(r"\b(heir|hoir)\b", "Hair", full_pdp_title, flags=re.IGNORECASE)
 
                         extracted["product_name"] = {
                             "value": full_pdp_title.strip(),
