@@ -530,9 +530,25 @@ def extract_declarations_from_multi_side(
                 if pdp_candidates:
                     pdp_candidates.sort(key=lambda it: it["props"]["area"] if it["props"] else 0, reverse=True)
                     best_pdp = pdp_candidates[0]
+                    pdp_name = best_pdp["text"].strip()
+
+                    # Multi-line PDP title + subtitle concatenation:
+                    # Check for subtitle/variant text directly below within dy <= 0.20 and aligned center
+                    if best_pdp["props"]:
+                        for sub_cand in front_candidates:
+                            if sub_cand == best_pdp or not sub_cand["props"]:
+                                continue
+                            dy = sub_cand["props"]["cy"] - best_pdp["props"]["cy"]
+                            dx = sub_cand["props"]["cx"] - best_pdp["props"]["cx"]
+                            if 0.02 <= dy <= 0.20 and abs(dx) <= 0.22:
+                                sub_text = sub_cand["text"].strip()
+                                if sub_text and sub_text.lower() not in pdp_name.lower() and len(sub_text) < 40:
+                                    pdp_name = f"{pdp_name} {sub_text}"
+                                    break
+
                     extracted["product_name"] = {
-                        "value": best_pdp["text"],
-                        "raw_val": best_pdp["text"],
+                        "value": pdp_name,
+                        "raw_val": pdp_name,
                         "confidence": best_pdp["confidence"],
                         "side": side,
                         "bbox_norm": best_pdp["bbox_norm"],
@@ -541,20 +557,20 @@ def extract_declarations_from_multi_side(
                         "detected": True
                     }
 
-            # 2. Brand: Upper text (typically above product name or at top of package ymin <= 0.30)
+            # 2. Brand: Upper text (typically above product name or at top of package ymin <= 0.35)
             if not extracted["brand"]["detected"] and front_candidates:
-                pdp_val = extracted["product_name"].get("value")
+                pdp_val = extracted["product_name"].get("value", "")
                 brand_candidates = [
                     it for it in front_candidates
-                    if it["text"] != pdp_val and it["props"] and it["props"]["ymin"] <= 0.35
+                    if it["text"].strip() not in pdp_val and pdp_val not in it["text"].strip() and it["props"] and it["props"]["ymin"] <= 0.35
                 ]
                 if brand_candidates:
                     # Sort primarily by vertical position (uppermost on front) then by area
                     brand_candidates.sort(key=lambda it: (it["props"]["ymin"], -it["props"]["area"]))
                     best_brand = brand_candidates[0]
                     extracted["brand"] = {
-                        "value": best_brand["text"],
-                        "raw_val": best_brand["text"],
+                        "value": best_brand["text"].strip(),
+                        "raw_val": best_brand["text"].strip(),
                         "confidence": best_brand["confidence"],
                         "side": side,
                         "bbox_norm": best_brand["bbox_norm"],
