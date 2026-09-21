@@ -151,15 +151,22 @@ async def analyze_product(
     save_tasks = [process_side(name, upload) for name, upload in available_uploads]
     await asyncio.gather(*save_tasks)
 
-    # Run OCR per side in worker thread pool without memory spikes
+    # Run OCR across available views using bounded 2-worker thread pool for 2x faster throughput
     loop = asyncio.get_event_loop()
-    for side_name, _ in available_uploads:
-        filepath = UPLOAD_DIR / f"pkg_{scan_id}_{side_name}.jpg"
-        if filepath.exists():
-            detections = await loop.run_in_executor(None, ocr_service.extract_text_with_boxes, str(filepath))
-            ocr_side_detections[side_name] = detections
-        else:
-            ocr_side_detections[side_name] = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _ocr_worker(s_name):
+        fp = UPLOAD_DIR / f"pkg_{scan_id}_{s_name}.jpg"
+        if fp.exists():
+            return s_name, ocr_service.extract_text_with_boxes(str(fp))
+        return s_name, []
+
+    workers = min(2, len(available_uploads))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        ocr_futures = [loop.run_in_executor(executor, _ocr_worker, name) for name, _ in available_uploads]
+        ocr_results = await asyncio.gather(*ocr_futures)
+        for s_name, dets in ocr_results:
+            ocr_side_detections[s_name] = dets
 
     # 1. Multi-side Field Extraction across available views
     extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)

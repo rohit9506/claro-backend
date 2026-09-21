@@ -148,7 +148,7 @@ def run_multimodal_vision_assistance(image_paths: Dict[str, str]) -> Optional[Di
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             fut = executor.submit(_do_multimodal_call)
-            return fut.result(timeout=10.0)
+            return fut.result(timeout=4.0)
     except Exception as e:
         print(f"[WARN] Multimodal vision fallback to deterministic physical package OCR: {e}")
         return None
@@ -327,7 +327,76 @@ def identify_product_multi_signal(
     if front_img_path:
         visual_sig = extract_visual_feature_signature(front_img_path)
 
-    # 2b. Supporting Multimodal Vision AI Pipeline (Google-Lens-like Visual Comprehension)
+    # 3. Multi-Signal Catalog Cross-Verification (Requires brand + distinctive tokens + variant/qty consistency)
+    catalog_match = None
+    if db:
+        catalog_match = match_catalog_by_strict_evidence(pkg_brand, pkg_name, pkg_variant, pkg_qty, combined_text, db)
+
+    if catalog_match:
+        top_prod, top_score, reason = catalog_match
+        return {
+            "status": "IDENTIFIED",
+            "matched_product": {
+                "id": top_prod.id,
+                "name": top_prod.name,
+                "brand": top_prod.brand,
+                "variant": pkg_variant,
+                "category": top_prod.category,
+                "barcode": top_prod.barcode or detected_barcode,
+                "confidence": top_score,
+                "match_source": reason,
+                "mrp": top_prod.mrp,
+                "net_quantity": top_prod.net_quantity or pkg_qty,
+                "manufacturer": top_prod.manufacturer,
+                "ingredients": top_prod.ingredients,
+                "nutrition_facts": top_prod.nutrition_facts
+            },
+            "candidates": [],
+            "barcode_detected": detected_barcode,
+            "evidence_source": "CATALOG_VERIFIED",
+            "visual_signature": visual_sig
+        }
+
+    def is_filename(val: Optional[str]) -> bool:
+        if not val or not str(val).strip():
+            return True
+        v = str(val).strip().lower()
+        if any(v.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
+            return True
+        if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", v):
+            return True
+        return False
+
+    # 4. Package Direct Optical Identification (Physical package is the Primary Source of Truth)
+    # If the package text was readable on the PDP, construct the exact identification directly from the package
+    if pkg_name and pkg_name not in ["Not detected", "Product could not be confidently identified."] and not is_filename(pkg_name):
+        detected_brand_clean = pkg_brand if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else "Brand on Package"
+        confidence = 0.94 if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else 0.85
+
+        return {
+            "status": "IDENTIFIED",
+            "matched_product": {
+                "id": None,
+                "name": pkg_name,
+                "brand": detected_brand_clean,
+                "variant": pkg_variant,
+                "category": "Packaged Product",
+                "barcode": detected_barcode,
+                "confidence": confidence,
+                "match_source": "Physical Package PDP Optical Extraction (Verbatim Package Text)",
+                "mrp": extracted_declarations.get("mrp", {}).get("value") if extracted_declarations else None,
+                "net_quantity": pkg_qty or (extracted_declarations.get("net_quantity", {}).get("value") if extracted_declarations else None),
+                "manufacturer": extracted_declarations.get("manufacturer", {}).get("value") if extracted_declarations else None,
+                "ingredients": None,
+                "nutrition_facts": None
+            },
+            "candidates": [],
+            "barcode_detected": detected_barcode,
+            "evidence_source": "PACKAGE_PDP_DIRECT",
+            "visual_signature": visual_sig
+        }
+
+    # 5. Supporting Multimodal Vision AI Pipeline (Fallback only when PDP text is unreadable or ambiguous)
     vision_info = run_multimodal_vision_assistance(image_paths)
     if vision_info and vision_info.get("product_name"):
         v_pname = str(vision_info["product_name"]).strip()
@@ -374,76 +443,6 @@ def identify_product_multi_signal(
             "visual_pipeline_verified": True
         }
 
-    # 3. Multi-Signal Catalog Cross-Verification (Requires brand + distinctive tokens + variant/qty consistency)
-    catalog_match = None
-    if db:
-        catalog_match = match_catalog_by_strict_evidence(pkg_brand, pkg_name, pkg_variant, pkg_qty, combined_text, db)
-
-    if catalog_match:
-        top_prod, top_score, reason = catalog_match
-        return {
-            "status": "IDENTIFIED",
-            "matched_product": {
-                "id": top_prod.id,
-                "name": top_prod.name,
-                "brand": top_prod.brand,
-                "variant": pkg_variant,
-                "category": top_prod.category,
-                "barcode": top_prod.barcode or detected_barcode,
-                "confidence": top_score,
-                "match_source": reason,
-                "mrp": top_prod.mrp,
-                "net_quantity": top_prod.net_quantity or pkg_qty,
-                "manufacturer": top_prod.manufacturer,
-                "ingredients": top_prod.ingredients,
-                "nutrition_facts": top_prod.nutrition_facts
-            },
-            "candidates": [],
-            "barcode_detected": detected_barcode,
-            "evidence_source": "CATALOG_VERIFIED",
-            "visual_signature": visual_sig
-        }
-
-    def is_filename(val: Optional[str]) -> bool:
-        if not val or not str(val).strip():
-            return True
-        v = str(val).strip().lower()
-        if any(v.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
-            return True
-        if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", v):
-            return True
-        return False
-
-    # 4. Package Direct Optical Identification (The physical package is the Primary Source of Truth)
-    # If the package text was readable on the PDP, construct the exact identification directly from the package!
-    if pkg_name and pkg_name not in ["Not detected", "Product could not be confidently identified."] and not is_filename(pkg_name):
-        detected_brand_clean = pkg_brand if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else "Brand on Package"
-        
-        # Determine confidence based on presence of brand and name
-        confidence = 0.94 if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else 0.85
-
-        return {
-            "status": "IDENTIFIED",
-            "matched_product": {
-                "id": None,
-                "name": pkg_name,
-                "brand": detected_brand_clean,
-                "variant": pkg_variant,
-                "category": "Packaged Product",
-                "barcode": detected_barcode,
-                "confidence": confidence,
-                "match_source": "Physical Package PDP Optical Extraction (Verbatim Package Text)",
-                "mrp": extracted_declarations.get("mrp", {}).get("value") if extracted_declarations else None,
-                "net_quantity": pkg_qty or (extracted_declarations.get("net_quantity", {}).get("value") if extracted_declarations else None),
-                "manufacturer": extracted_declarations.get("manufacturer", {}).get("value") if extracted_declarations else None,
-                "ingredients": None,
-                "nutrition_facts": None
-            },
-            "candidates": [],
-            "barcode_detected": detected_barcode,
-            "evidence_source": "PACKAGE_PDP_DIRECT",
-            "visual_signature": visual_sig
-        }
 
     # 5. If confidence is insufficient, NEVER force a product or return Haldiram!
     return {

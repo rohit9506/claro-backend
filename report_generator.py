@@ -249,17 +249,7 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
         if resolved_path:
             try:
                 # Ensure EXIF orientation is corrected so phone photos are oriented upright
-                norm_path = resolved_path
-                try:
-                    with PILImage.open(resolved_path) as im:
-                        oriented_im = ImageOps.exif_transpose(im)
-                        norm_filename = f"norm_{resolved_path.stem}.jpg"
-                        norm_path = resolved_path.parent / norm_filename
-                        oriented_im.convert("RGB").save(norm_path, format="JPEG", quality=88)
-                except Exception:
-                    norm_path = resolved_path
-
-                img_obj = Image(str(norm_path), width=img_width, height=img_height, kind='proportional')
+                img_obj = Image(str(resolved_path), width=img_width, height=img_height, kind='proportional')
                 col_items.append(Spacer(1, 3))
                 col_items.append(img_obj)
             except Exception as img_err:
