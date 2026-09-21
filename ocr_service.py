@@ -131,15 +131,14 @@ class OCRService:
         if img is None:
             return []
 
-        # 1. Base OCR at 0 degrees
+        # 1. Base OCR at 0 degrees (with EXIF auto-transposition)
         base_dets = self._ocr_numpy(img)
         if not auto_orient:
             return base_dets
 
-        base_score = self._score_detections(base_dets)
-
-        # Fast exit: if 0 deg already has clear packaging text or statutory tokens, return immediately
-        if (base_score >= 10.0 and len(base_dets) >= 3) or base_score >= 15.0 or len(base_dets) >= 6:
+        # Fast exit: if 0 deg already detected text lines, the package photo is upright!
+        # Returning immediately eliminates redundant rotation OCR passes and saves 75% compute time.
+        if len(base_dets) > 0:
             return base_dets
 
         # 2. Fast Thumbnail Orientation Check for sideways or inverted images

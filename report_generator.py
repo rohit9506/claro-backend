@@ -136,29 +136,37 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
 
     # 2. Case & Officer Information
     status = str(inspection_data.get("status", "PENDING_VERIFICATION")).upper()
-    status_bg = colors.HexColor("#DC2626") if status == "NON_COMPLIANT" else (colors.HexColor("#16A34A") if status == "COMPLIANT" else colors.HexColor("#D97706"))
+    status_bg = colors.HexColor("#DC2626") if status in ["NON_COMPLIANT", "NON-COMPLIANT"] else (colors.HexColor("#16A34A") if status == "COMPLIANT" else colors.HexColor("#D97706"))
 
     officer_info = [
         [
-            Paragraph("<b>Officer Name:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("officer_name", "Enforcement Officer"))), cell_style),
+            Paragraph("<b>Product Inspected:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("product_name", "Product Under Inspection"))), cell_style),
             Paragraph("<b>Inspection Status:</b>", cell_bold), Paragraph(f"<b><font color='white'>{status}</font></b>", ParagraphStyle('StatusStyle', parent=cell_style, backColor=status_bg, borderPadding=2.5))
         ],
         [
-            Paragraph("<b>Officer ID:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("officer_badge", "LM-OFF-01"))), cell_style),
+            Paragraph("<b>Brand:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("brand", "N/A"))), cell_style),
+            Paragraph("<b>Variant / Flavor:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("variant") or "Standard / Base")), cell_style)
+        ],
+        [
+            Paragraph("<b>MRP:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("mrp", "N/A"))), cell_style),
+            Paragraph("<b>Net Quantity:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("net_quantity", "N/A"))), cell_style)
+        ],
+        [
+            Paragraph("<b>Officer / Auditor:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("officer_name", "Enforcement Officer"))), cell_style),
             Paragraph("<b>Location / Premise:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("location", "Field Retail Store"))), cell_style)
         ],
         [
-            Paragraph("<b>Product Inspected:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("product_name", "Packaged Commodity"))), cell_style),
+            Paragraph("<b>Scan Reference:</b>", cell_bold), Paragraph(html.escape(str(inspection_num)), cell_style),
             Paragraph("<b>Date / Time:</b>", cell_bold), Paragraph(html.escape(str(inspection_data.get("created_at", datetime.datetime.utcnow().strftime('%Y-%m-%d')))), cell_style)
         ]
     ]
-    meta_table = Table(officer_info, colWidths=[95, 175, 95, 175])
+    meta_table = Table(officer_info, colWidths=[100, 170, 100, 170])
     meta_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
         ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
         ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     story.append(meta_table)
@@ -267,27 +275,43 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
     images_dict = inspection_data.get("images") or {}
     front_img = inspection_data.get("front_image") or images_dict.get("front")
     back_img = inspection_data.get("back_image") or images_dict.get("back")
-    side_img = inspection_data.get("side_image") or images_dict.get("side")
-    right_img = inspection_data.get("right_image") or images_dict.get("right_side") or images_dict.get("right")
-    left_img = inspection_data.get("left_image") or images_dict.get("left_side") or images_dict.get("left")
+    right_img = inspection_data.get("right_image") or images_dict.get("right_side")
+    left_img = inspection_data.get("left_image") or images_dict.get("left_side")
 
-    is_4_sided = bool(right_img or left_img)
+    available_cols = []
+    if front_img:
+        available_cols.append(("1. FRONT (PDP & Brand)", front_img))
+    if back_img:
+        available_cols.append(("2. BACK (Declarations)", back_img))
+    if right_img:
+        available_cols.append(("3. RIGHT (MRP & USP)", right_img))
+    if left_img:
+        available_cols.append(("4. LEFT (Batch & Origin)", left_img))
 
-    if is_4_sided:
-        front_col = resolve_image_flowable(front_img, "1. FRONT (PDP & Brand)", img_width=120, img_height=85)
-        back_col = resolve_image_flowable(back_img, "2. BACK (Declarations)", img_width=120, img_height=85)
-        right_col = resolve_image_flowable(right_img or side_img, "3. RIGHT (MRP & USP)", img_width=120, img_height=85)
-        left_col = resolve_image_flowable(left_img, "4. LEFT (Batch & Origin)", img_width=120, img_height=85)
-
-        story.append(Paragraph("CAPTURED PACKAGE EVIDENCE (4-SIDED VISUAL AUDIT)", heading_style))
-        evidence_table = Table([[front_col, back_col, right_col, left_col]], colWidths=[135, 135, 135, 135])
+    num_images = len(available_cols)
+    if num_images == 2:
+        col_widths = [270, 270]
+        flowable_cols = [resolve_image_flowable(img, lbl, img_width=180, img_height=110) for lbl, img in available_cols]
+        table_title = "CAPTURED PACKAGE EVIDENCE (2-VIEW AUDIT)"
+    elif num_images == 3:
+        col_widths = [180, 180, 180]
+        flowable_cols = [resolve_image_flowable(img, lbl, img_width=140, img_height=95) for lbl, img in available_cols]
+        table_title = "CAPTURED PACKAGE EVIDENCE (3-VIEW AUDIT)"
+    elif num_images == 4:
+        col_widths = [135, 135, 135, 135]
+        flowable_cols = [resolve_image_flowable(img, lbl, img_width=115, img_height=80) for lbl, img in available_cols]
+        table_title = "CAPTURED PACKAGE EVIDENCE (4-VIEW AUDIT)"
+    elif num_images == 1:
+        col_widths = [540]
+        flowable_cols = [resolve_image_flowable(available_cols[0][1], available_cols[0][0], img_width=220, img_height=130)]
+        table_title = "CAPTURED PACKAGE EVIDENCE (SINGLE-VIEW AUDIT)"
     else:
-        front_col = resolve_image_flowable(front_img, "1. FRONT (PDP & Brand)", img_width=160, img_height=105)
-        back_col = resolve_image_flowable(back_img, "2. BACK (Declarations)", img_width=160, img_height=105)
-        side_col = resolve_image_flowable(side_img, "3. SIDE (MRP & Date)", img_width=160, img_height=105)
+        col_widths = [540]
+        flowable_cols = [resolve_image_flowable(None, "Package Evidence", img_width=200, img_height=120)]
+        table_title = "CAPTURED PACKAGE EVIDENCE"
 
-        story.append(Paragraph("CAPTURED PACKAGE EVIDENCE (3-SIDED VISUAL AUDIT)", heading_style))
-        evidence_table = Table([[front_col, back_col, side_col]], colWidths=[180, 180, 180])
+    story.append(Paragraph(table_title, heading_style))
+    evidence_table = Table([flowable_cols], colWidths=col_widths)
 
     evidence_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
@@ -318,8 +342,15 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
     ]
 
     for val in inspection_data.get("validations", []):
-        st = str(val.get("status", "REVIEW")).upper()
-        st_color = "#16A34A" if st == "PASS" else ("#DC2626" if st == "FAIL" else "#D97706")
+        st = str(val.get("status", "NEEDS VERIFICATION")).upper()
+        if st in ["PASS", "COMPLIANT"]:
+            st_color = "#16A34A"
+        elif st in ["FAIL", "NON-COMPLIANT", "MISSING"]:
+            st_color = "#DC2626"
+        elif st in ["NOT APPLICABLE"]:
+            st_color = "#64748B"
+        else:
+            st_color = "#D97706"
 
         conf_val = val.get("confidence", 0)
         try:
@@ -346,7 +377,7 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
             Paragraph(reason_text, cell_style)
         ])
 
-    comp_table = Table(table_rows, colWidths=[95, 105, 75, 45, 45, 175])
+    comp_table = Table(table_rows, colWidths=[95, 105, 75, 55, 40, 170])
     comp_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
         ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
@@ -359,42 +390,24 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
     story.append(Spacer(1, 8))
 
     # 5b. Corrective Guidance / How to Correct Non-Compliance
-    non_compliant_items = [
-        v for v in inspection_data.get("validations", [])
-        if str(v.get("status", "")).upper() in ["FAIL", "REVIEW"]
-    ]
-
-    if non_compliant_items:
-        story.append(Paragraph("HOW TO CORRECT NON-COMPLIANCE / STATUTORY GUIDANCE", heading_style))
-        guidance_rules = {
-            "product_name": "Ensure the common or generic name of the commodity is clearly displayed on the Principal Display Panel (PDP) under Rule 6(1)(b).",
-            "brand": "Ensure brand identity or commercial trade name is clearly declared under Rule 6(1)(b).",
-            "mrp": "Ensure MRP is declared strictly as 'Maximum Retail Price ₹... (inclusive of all taxes)' on the PDP or statutory panel in clear, legible font.",
-            "net_quantity": "Declare Net Quantity in SI metric units (g, kg, ml, l) adhering to the minimum letter/numeral height specified in Schedule II based on package area.",
-            "unit_sale_price": "For packages containing more than 1 unit/kg/litre, clearly print Unit Sale Price rounded to 2 decimal places (e.g., ₹0.25 / g).",
-            "manufacturer": "Print full name and registered commercial entity of the manufacturer, packer, or importer.",
-            "complete_address": "Specify complete postal address of manufacturing/packing premises along with valid 6-digit PIN code.",
-            "dates": "Declare Month and Year of manufacture / packing in standard DD/MM/YYYY or MM/YYYY format.",
-            "consumer_care": "Provide name, address, telephone/toll-free number, and active email address of the consumer redressal officer under Rule 6(2).",
-            "country_of_origin": "State country of origin prominently for all imported or domestically packaged goods.",
-            "batch_lot_number": "Ensure batch, lot, or code number is clearly visible for product traceability."
-        }
-
+    structured_guidance = inspection_data.get("correction_guidance", [])
+    if structured_guidance:
+        story.append(Paragraph("HOW TO CORRECT NON-COMPLIANCE / STATUTORY GUIDANCE (PCR 2011)", heading_style))
         guidance_rows = [[
-            Paragraph("<b>Deficient Declaration</b>", cell_bold),
-            Paragraph("<b>Statutory Corrective Action Required (PCR 2011)</b>", cell_bold)
+            Paragraph("<b>Requirement & Rule</b>", cell_bold),
+            Paragraph("<b>Deficiency Identified</b>", cell_bold),
+            Paragraph("<b>Statutory Action Required (How to Correct)</b>", cell_bold)
         ]]
-
-        for item in non_compliant_items:
-            fn = item.get("field_name", "").lower()
-            dn = item.get("display_name") or item.get("field_name")
-            remedy = guidance_rules.get(fn, f"Ensure mandatory statutory declaration for {dn} complies with PCR 2011 Rule 6 provisions.")
+        for g in structured_guidance:
+            req_label = f"<b>{html.escape(str(g.get('display_name') or g.get('requirement', 'Declaration')))}</b><br/><font size=6.5 color='#64748B'>{html.escape(str(g.get('rule_reference', 'PCR 2011')))}</font>"
+            what_fix = html.escape(str(g.get('what_needs_correction') or g.get('reason_failed', 'Non-compliant declaration.')))
+            how_fix = html.escape(str(g.get('how_to_correct', 'Ensure declaration complies with PCR 2011.')))
             guidance_rows.append([
-                Paragraph(f"<font color='#DC2626'><b>{html.escape(str(dn))}</b></font>", cell_style),
-                Paragraph(html.escape(remedy), cell_style)
+                Paragraph(req_label, cell_style),
+                Paragraph(f"<font color='#DC2626'>{what_fix}</font>", cell_style),
+                Paragraph(how_fix, cell_style)
             ])
-
-        guidance_table = Table(guidance_rows, colWidths=[160, 380])
+        guidance_table = Table(guidance_rows, colWidths=[130, 180, 230])
         guidance_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#FEF2F2")),
             ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#FECACA")),
@@ -405,6 +418,52 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
         ]))
         story.append(KeepTogether(guidance_table))
         story.append(Spacer(1, 8))
+    else:
+        non_compliant_items = [
+            v for v in inspection_data.get("validations", [])
+            if str(v.get("status", "")).upper() in ["FAIL", "NON-COMPLIANT", "MISSING", "REVIEW", "NEEDS VERIFICATION"]
+        ]
+        if non_compliant_items:
+            story.append(Paragraph("HOW TO CORRECT NON-COMPLIANCE / STATUTORY GUIDANCE", heading_style))
+            guidance_rules = {
+                "product_name": "Ensure the common or generic name of the commodity is clearly displayed on the Principal Display Panel (PDP) under Rule 6(1)(b).",
+                "brand": "Ensure brand identity or commercial trade name is clearly declared under Rule 6(1)(b).",
+                "mrp": "Ensure MRP is declared strictly as 'Maximum Retail Price ₹... (inclusive of all taxes)' on the PDP or statutory panel in clear, legible font.",
+                "net_quantity": "Declare Net Quantity in SI metric units (g, kg, ml, l) adhering to the minimum letter/numeral height specified in Schedule II based on package area.",
+                "unit_sale_price": "For packages containing more than 1 unit/kg/litre, clearly print Unit Sale Price rounded to 2 decimal places (e.g., ₹0.25 / g).",
+                "manufacturer": "Print full name and registered commercial entity of the manufacturer, packer, or importer.",
+                "complete_address": "Specify complete postal address of manufacturing/packing premises along with valid 6-digit PIN code.",
+                "dates": "Declare Month and Year of manufacture / packing in standard DD/MM/YYYY or MM/YYYY format.",
+                "consumer_care": "Provide name, address, telephone/toll-free number, and active email address of the consumer redressal officer under Rule 6(2).",
+                "country_of_origin": "State country of origin prominently for all imported or domestically packaged goods.",
+                "batch_lot_number": "Ensure batch, lot, or code number is clearly visible for product traceability."
+            }
+
+            guidance_rows = [[
+                Paragraph("<b>Deficient Declaration</b>", cell_bold),
+                Paragraph("<b>Statutory Corrective Action Required (PCR 2011)</b>", cell_bold)
+            ]]
+
+            for item in non_compliant_items:
+                fn = item.get("field_name", "").lower()
+                dn = item.get("display_name") or item.get("field_name")
+                remedy = guidance_rules.get(fn, f"Ensure mandatory statutory declaration for {dn} complies with PCR 2011 Rule 6 provisions.")
+                guidance_rows.append([
+                    Paragraph(f"<font color='#DC2626'><b>{html.escape(str(dn))}</b></font>", cell_style),
+                    Paragraph(html.escape(remedy), cell_style)
+                ])
+
+            guidance_table = Table(guidance_rows, colWidths=[160, 380])
+            guidance_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#FEF2F2")),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#FECACA")),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#FEE2E2")),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(KeepTogether(guidance_table))
+            story.append(Spacer(1, 8))
 
     # 6. Verification Sign-off block
     sign_off_data = [

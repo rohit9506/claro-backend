@@ -1,19 +1,29 @@
+import os
+import re
 import json
 import uuid
 import datetime
+import asyncio
 from typing import Optional, List
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from config import UPLOAD_DIR
+from pathlib import Path
+from fastapi.responses import FileResponse
+from PIL import Image as PILImage
+
+from config import UPLOAD_DIR, REPORT_DIR
 from database import get_db
-from models import User, Product, ProductReview, UserSavedProduct
+from models import User, Product, ProductReview, UserSavedProduct, Inspection, InspectionImage, FieldValidation, OCRResult, Rule
 from auth_deps import get_current_user, require_role, log_audit
+from cv_quality import check_and_enhance_image
 from ocr_service import ocr_service
 from product_identifier import identify_product_multi_signal
 from field_extractor import extract_declarations_from_multi_side
+from rule_engine import evaluate_legal_metrology_rules
+from report_generator import generate_inspection_pdf, render_pdf_to_base64_pages
 
 router = APIRouter(prefix="/consumer", tags=["Consumer Product Intelligence"])
 
@@ -134,78 +144,99 @@ def get_product_details(product_id: int, db: Session = Depends(get_db)):
 async def consumer_scan(
     front_image: Optional[UploadFile] = File(None),
     back_image: Optional[UploadFile] = File(None),
-    side_image: Optional[UploadFile] = File(None),
     right_image: Optional[UploadFile] = File(None),
     left_image: Optional[UploadFile] = File(None),
-    image: Optional[UploadFile] = File(None),  # Backward compatibility
     db: Session = Depends(get_db)
 ):
     """
-    Consumer scanning - supports 4-sided photo capture (Front, Back, Right Side, Left Side) or single capture.
-    Performs multi-signal product identification (Barcode, Catalog visual match, OCR text match)
-    and field extraction.
+    Consumer scanning - supports flexible 2, 3, or 4 package views.
+    Executes identical visual product identification pipeline, multi-side OCR, 
+    statutory Legal Metrology rule engine, database audit persistence, and PDF generation.
     """
-    # Normalize inputs: if only `image` was provided, treat it as front_image
-    if not front_image and image:
-        front_image = image
+    available_uploads = []
+    if front_image: available_uploads.append(("front", front_image))
+    if back_image: available_uploads.append(("back", back_image))
+    if right_image: available_uploads.append(("right_side", right_image))
+    if left_image: available_uploads.append(("left_side", left_image))
 
-    if not front_image:
-        raise HTTPException(status_code=400, detail="Please provide at least the front image of the product.")
+    if len(available_uploads) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least two package views are required to run Legal Metrology audit."
+        )
 
-    session_id = uuid.uuid4().hex[:8]
+    scan_id = f"CLARO-SCAN-2026-{uuid.uuid4().hex[:8].upper()}"
     images_saved = {}
+    images_metadata = {}
     ocr_side_detections = {}
 
-    async def save_and_ocr(side_name: str, upload_file: UploadFile):
+    async def process_side(side_name: str, upload_file: UploadFile):
         if not upload_file:
-            return
+            return None
         content = await upload_file.read()
         if not content:
-            return
-        filename = f"consumer_{session_id}_{side_name}.jpg"
+            return None
+        
+        filename = f"pkg_{scan_id}_{side_name}.jpg"
         filepath = UPLOAD_DIR / filename
         with open(filepath, "wb") as f:
             f.write(content)
+        
+        # Quality check: auto-fix mild blur with unsharp mask/CLAHE, or raise error if severe blur
+        q_info = check_and_enhance_image(str(filepath))
+        if not q_info.get("can_proceed"):
+            friendly_side = side_name.replace("_", " ").title()
+            raise HTTPException(
+                status_code=400,
+                detail=f"The {friendly_side} package photo is too blurry to reliably detect text. Please hold the camera steady, ensure good lighting, and retake."
+            )
+
+        # Record metadata
+        try:
+            with PILImage.open(filepath) as im:
+                w, h = im.size
+        except Exception:
+            w, h = 0, 0
+
+        file_size = len(content)
+        quality_score = float(q_info.get("laplacian_var", 100.0))
+
         images_saved[side_name] = f"/uploads/{filename}"
-        dets = ocr_service.extract_text_with_boxes(str(filepath))
-        ocr_side_detections[side_name] = dets
+        images_metadata[side_name] = {
+            "file_size": file_size,
+            "width": w,
+            "height": h,
+            "quality_score": quality_score
+        }
+        return filepath
 
-    await save_and_ocr("front", front_image)
-    if back_image:
-        await save_and_ocr("back", back_image)
-    if right_image:
-        await save_and_ocr("right_side", right_image)
-        images_saved["side"] = images_saved["right_side"]
-        ocr_side_detections["side"] = ocr_side_detections["right_side"]
-    elif side_image:
-        await save_and_ocr("side", side_image)
-    if left_image:
-        await save_and_ocr("left_side", left_image)
+    # Process file uploads and quality checks
+    save_tasks = [process_side(name, upload) for name, upload in available_uploads]
+    await asyncio.gather(*save_tasks)
 
-    # 1. Extract Declarations
+    # Run OCR per side in worker thread pool without memory spikes
+    loop = asyncio.get_event_loop()
+    for side_name, _ in available_uploads:
+        filepath = UPLOAD_DIR / f"pkg_{scan_id}_{side_name}.jpg"
+        if filepath.exists():
+            dets = await loop.run_in_executor(None, ocr_service.extract_text_with_boxes, str(filepath))
+            ocr_side_detections[side_name] = dets
+        else:
+            ocr_side_detections[side_name] = []
+
+    # 1. Multi-Side Declaration Aggregation
     extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)
 
-    # 2. Multi-Signal Product Identification (Barcode + Catalog Visual Match + Physical Package OCR)
+    # 2. Multi-Signal Convergence Product Identification (Barcode + Visual + Physical Package OCR)
     prod_ident = identify_product_multi_signal(
-        image_paths={k: str(UPLOAD_DIR / f"consumer_{session_id}_{k}.jpg") for k in images_saved.keys()},
+        image_paths={k: str(UPLOAD_DIR / f"pkg_{scan_id}_{k}.jpg") for k in images_saved.keys()},
         ocr_side_detections=ocr_side_detections,
         extracted_declarations=extracted_declarations,
         db=db
     )
 
-    # Matched product details
-    matched_prod_dict = prod_ident.get("matched_product")
-    matched_product_id = matched_prod_dict.get("id") if matched_prod_dict else None
-
-    # Reviews and community stats if product is in catalog
-    community_stats = None
-    if matched_product_id:
-        reviews = db.query(ProductReview).filter(ProductReview.product_id == matched_product_id).all()
-        avg_overall = sum(r.overall_rating for r in reviews) / len(reviews) if reviews else 0.0
-        community_stats = {
-            "review_count": len(reviews),
-            "avg_overall": round(avg_overall, 1)
-        }
+    matched_p = prod_ident.get("matched_product")
+    matched_product_id = matched_p.get("id") if matched_p else None
 
     # Canonical product name resolution
     def is_filename(val: Optional[str]) -> bool:
@@ -218,38 +249,293 @@ async def consumer_scan(
             return True
         return False
 
-    if matched_prod_dict and matched_prod_dict.get("name") and not is_filename(matched_prod_dict.get("name")):
-        resolved_name = matched_prod_dict["name"]
+    if matched_p and matched_p.get("name") and not is_filename(matched_p.get("name")):
+        final_product_name = matched_p["name"]
+        final_brand = matched_p.get("brand") or "Brand on Package"
+        final_variant = matched_p.get("variant")
         verification_status = "Verified"
     elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""] and not is_filename(extracted_declarations["product_name"]["value"]):
-        resolved_name = extracted_declarations["product_name"]["value"]
+        final_product_name = extracted_declarations["product_name"]["value"]
+        final_brand = extracted_declarations.get("brand", {}).get("value") or "Brand on Package"
+        final_variant = extracted_declarations.get("variant", {}).get("value")
         verification_status = "Identified via Physical Package"
     else:
-        resolved_name = "Product could not be confidently identified."
+        final_product_name = "Product could not be confidently identified."
+        final_brand = "Not confidently detected"
+        final_variant = None
         verification_status = "Needs Verification"
 
-    raw_brand = (matched_prod_dict.get("brand") if matched_prod_dict else None) or extracted_declarations.get("brand", {}).get("value")
-    resolved_brand = raw_brand if raw_brand and not is_filename(raw_brand) else "Not confidently detected"
+    # 3. Query Active Rules & Evaluate Compliance via Deterministic Rule Engine
+    active_rules = db.query(Rule).filter(Rule.is_active == True).all()
+    validations_res, overall_status, pass_c, fail_c, review_c, correction_guidance = evaluate_legal_metrology_rules(
+        extracted_declarations, active_rules
+    )
+
+    if final_product_name == "Product could not be confidently identified." and overall_status == "COMPLIANT":
+        overall_status = "PENDING_VERIFICATION"
+        review_c += 1
+
+    # 4. Persist to Centralized Database
+    inspection = Inspection(
+        inspection_number=scan_id,
+        officer_id=None,
+        product_id=matched_product_id,
+        product_name=final_product_name,
+        brand=final_brand,
+        variant=final_variant,
+        mrp=extracted_declarations.get("mrp", {}).get("value"),
+        net_quantity=extracted_declarations.get("net_quantity", {}).get("value"),
+        source="CAMERA",
+        status=overall_status,
+        pass_count=pass_c,
+        fail_count=fail_c,
+        review_count=review_c,
+        front_image=images_saved.get("front"),
+        back_image=images_saved.get("back"),
+        right_image=images_saved.get("right_side"),
+        left_image=images_saved.get("left_side"),
+        location="Consumer Scan",
+        officer_notes="Consumer package scan and statutory verification.",
+        created_at=utc_now(),
+        finalized_at=utc_now() if overall_status != "PENDING_VERIFICATION" else None
+    )
+    db.add(inspection)
+    db.commit()
+    db.refresh(inspection)
+
+    # Persist all captured package images with complete metadata
+    for side_k, img_rel_path in images_saved.items():
+        meta = images_metadata.get(side_k, {})
+        insp_img = InspectionImage(
+            inspection_id=inspection.id,
+            side=side_k,
+            view_type=side_k,
+            image_path=img_rel_path,
+            source=inspection.source,
+            mime_type="image/jpeg",
+            file_size=meta.get("file_size"),
+            width=meta.get("width"),
+            height=meta.get("height"),
+            quality_score=meta.get("quality_score", 100.0),
+            is_accepted=True,
+            quality_notes=f"Accepted during package inspection ({side_k})",
+            processing_status="PROCESSED"
+        )
+        db.add(insp_img)
+
+    # Save Field Validations
+    field_records = []
+    for v in validations_res:
+        fv = FieldValidation(
+            inspection_id=inspection.id,
+            field_name=v["field_name"],
+            detected_value=v["detected_value"],
+            requirement_summary=v["requirement_summary"],
+            rule_reference=v["rule_reference"],
+            status=v.get("status", v.get("raw_status", "REVIEW")),
+            confidence=v["confidence"],
+            reason=v["reason"],
+            image_side=v["image_side"],
+            bbox_json=json.dumps(v["bbox_norm"])
+        )
+        field_records.append(fv)
+    db.add_all(field_records)
+
+    # Save raw OCR outputs
+    for side_k, dets in ocr_side_detections.items():
+        ocr_rec = OCRResult(
+            inspection_id=inspection.id,
+            image_side=side_k,
+            raw_text=ocr_service.get_full_text(dets),
+            boxes_json=json.dumps(dets)
+        )
+        db.add(ocr_rec)
+
+    db.commit()
+
+    # 5. Generate Official Digital Inspection Report PDF
+    pdf_payload = {
+        "inspection_number": scan_id,
+        "officer_name": "Consumer Verification",
+        "officer_badge": "CONSUMER",
+        "location": "Consumer Scan",
+        "product_name": final_product_name,
+        "brand": final_brand,
+        "variant": final_variant,
+        "mrp": extracted_declarations.get("mrp", {}).get("value"),
+        "net_quantity": extracted_declarations.get("net_quantity", {}).get("value"),
+        "created_at": inspection.created_at.strftime("%Y-%m-%d %H:%M UTC"),
+        "status": overall_status,
+        "pass_count": pass_c,
+        "fail_count": fail_c,
+        "review_count": review_c,
+        "officer_notes": "Consumer package scan and statutory verification.",
+        "validations": validations_res,
+        "correction_guidance": correction_guidance,
+        "front_image": images_saved.get("front"),
+        "back_image": images_saved.get("back"),
+        "right_image": images_saved.get("right_side"),
+        "left_image": images_saved.get("left_side"),
+        "images": images_saved
+    }
+    try:
+        generate_inspection_pdf(pdf_payload)
+    except Exception as pdf_err:
+        print(f"[WARN] Consumer PDF generation deferred: {pdf_err}")
+
+    # Community reviews/stats if product is in catalog
+    community_stats = None
+    if matched_product_id:
+        reviews = db.query(ProductReview).filter(ProductReview.product_id == matched_product_id).all()
+        avg_overall = sum(r.overall_rating for r in reviews) / len(reviews) if reviews else 0.0
+        community_stats = {
+            "review_count": len(reviews),
+            "avg_overall": round(avg_overall, 1)
+        }
 
     return {
         "success": True,
-        "status": prod_ident["status"],
-        "matched": bool(matched_prod_dict),
+        "scan_id": scan_id,
+        "inspection_id": inspection.id,
+        "inspection_number": scan_id,
+        "status": overall_status,
+        "overall_status": overall_status,
         "product_id": matched_product_id,
-        "product_name": resolved_name,
-        "brand": resolved_brand,
+        "product_name": final_product_name,
+        "brand": final_brand,
+        "variant": final_variant,
+        "mrp": extracted_declarations.get("mrp", {}).get("value"),
+        "net_quantity": extracted_declarations.get("net_quantity", {}).get("value"),
         "verification_status": verification_status,
-        "matched_product": matched_prod_dict,
+        "matched": bool(matched_p),
+        "matched_product": matched_p,
         "candidates": prod_ident.get("candidates", []),
         "barcode_detected": prod_ident.get("barcode_detected"),
         "extracted_declarations": extracted_declarations,
+        "pass_count": pass_c,
+        "fail_count": fail_c,
+        "review_count": review_c,
+        "validations": validations_res,
+        "correction_guidance": correction_guidance,
+        "report_url": f"/api/consumer/inspections/{inspection.id}/report.pdf",
         "community_stats": community_stats,
         "front_image": images_saved.get("front"),
         "back_image": images_saved.get("back"),
-        "right_image": images_saved.get("right_side") or images_saved.get("right"),
-        "left_image": images_saved.get("left_side") or images_saved.get("left"),
-        "side_image": images_saved.get("side") or images_saved.get("right_side"),
+        "right_image": images_saved.get("right_side"),
+        "left_image": images_saved.get("left_side"),
         "images": images_saved
+    }
+
+# 3b. Download or View Consumer Inspection Report PDF
+@router.get("/inspections/{inspection_id}/report.pdf")
+def get_consumer_inspection_report(
+    inspection_id: int,
+    inline: bool = Query(True),
+    db: Session = Depends(get_db)
+):
+    insp = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspection not found.")
+
+    pdf_path = REPORT_DIR / f"{insp.inspection_number}.pdf"
+    if not pdf_path.exists():
+        validations = [
+            {
+                "field_name": v.field_name,
+                "detected_value": v.detected_value,
+                "rule_reference": v.rule_reference,
+                "status": v.status,
+                "confidence": v.confidence,
+                "reason": v.reason
+            }
+            for v in insp.validations
+        ]
+        generate_inspection_pdf({
+            "inspection_number": insp.inspection_number,
+            "officer_name": "Consumer Verification",
+            "officer_badge": "CONSUMER",
+            "location": insp.location or "Consumer Scan",
+            "product_name": insp.product_name,
+            "brand": insp.brand,
+            "variant": insp.variant,
+            "mrp": insp.mrp,
+            "net_quantity": insp.net_quantity,
+            "created_at": insp.created_at.strftime("%Y-%m-%d %H:%M UTC") if insp.created_at else datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "status": insp.status,
+            "pass_count": insp.pass_count,
+            "fail_count": insp.fail_count,
+            "review_count": insp.review_count,
+            "officer_notes": insp.officer_notes,
+            "validations": validations,
+            "front_image": insp.front_image,
+            "back_image": insp.back_image,
+            "right_image": insp.right_image,
+            "left_image": insp.left_image
+        })
+
+    return FileResponse(
+        str(pdf_path),
+        media_type="application/pdf",
+        filename=f"Claro_Inspection_{insp.inspection_number}.pdf",
+        content_disposition_type="inline" if inline else "attachment"
+    )
+
+# 3c. In-App High-Resolution PDF Report Preview for Consumer
+@router.get("/inspections/{inspection_id}/report/preview")
+def get_consumer_inspection_report_preview(
+    inspection_id: int,
+    db: Session = Depends(get_db)
+):
+    insp = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspection not found.")
+
+    pdf_path = REPORT_DIR / f"{insp.inspection_number}.pdf"
+    if not pdf_path.exists():
+        validations = [
+            {
+                "field_name": v.field_name,
+                "detected_value": v.detected_value,
+                "rule_reference": v.rule_reference,
+                "status": v.status,
+                "confidence": v.confidence,
+                "reason": v.reason
+            }
+            for v in insp.validations
+        ]
+        generate_inspection_pdf({
+            "inspection_number": insp.inspection_number,
+            "officer_name": "Consumer Verification",
+            "officer_badge": "CONSUMER",
+            "location": insp.location or "Consumer Scan",
+            "product_name": insp.product_name,
+            "brand": insp.brand,
+            "variant": insp.variant,
+            "mrp": insp.mrp,
+            "net_quantity": insp.net_quantity,
+            "created_at": insp.created_at.strftime("%Y-%m-%d %H:%M UTC") if insp.created_at else datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "status": insp.status,
+            "pass_count": insp.pass_count,
+            "fail_count": insp.fail_count,
+            "review_count": insp.review_count,
+            "officer_notes": insp.officer_notes,
+            "validations": validations,
+            "front_image": insp.front_image,
+            "back_image": insp.back_image,
+            "right_image": insp.right_image,
+            "left_image": insp.left_image
+        })
+
+    pages = render_pdf_to_base64_pages(str(pdf_path), scale=2.0)
+    return {
+        "success": True,
+        "inspection_id": insp.id,
+        "inspection_number": insp.inspection_number,
+        "product_name": insp.product_name,
+        "status": insp.status,
+        "total_pages": len(pages),
+        "pages": pages,
+        "pdf_url": f"/api/consumer/inspections/{insp.id}/report.pdf"
     }
 
 # 4. Product Comparison (Normalized per 100g)

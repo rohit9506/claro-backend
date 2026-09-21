@@ -514,7 +514,8 @@ def get_verification_queue(
             "officer_name": insp.officer.full_name if insp.officer else "Enforcement Officer",
             "front_image": insp.front_image,
             "back_image": insp.back_image,
-            "side_image": insp.side_image,
+            "right_image": insp.right_image,
+            "left_image": insp.left_image,
             "review_fields": review_fields
         })
 

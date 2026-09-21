@@ -99,15 +99,22 @@ def extract_declarations_from_multi_side(
     extracted = {
         "product_name": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Primary Display Panel", "spatial_relationship": "PDP_CENTER", "detected": False},
         "brand": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.05, 0.1, 0.25, 0.9], "heading": "Brand Identity", "spatial_relationship": "PDP_TOP", "detected": False},
+        "variant": {"value": "Not Applicable", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Variant / Flavour / Size", "spatial_relationship": "PDP_SUBTITLE", "detected": False},
         "mrp": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "MRP", "spatial_relationship": "INLINE", "detected": False},
         "net_quantity": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Net Quantity", "spatial_relationship": "INLINE", "detected": False},
         "unit_sale_price": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "front", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Unit Sale Price", "spatial_relationship": "INLINE", "detected": False},
         "manufacturer": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Manufacturer", "spatial_relationship": "INLINE", "detected": False},
+        "packer": {"value": "Not Applicable", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Packer Identity", "spatial_relationship": "INLINE", "detected": False},
+        "importer": {"value": "Not Applicable", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Importer Identity", "spatial_relationship": "INLINE", "detected": False},
         "complete_address": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Premises / Address", "spatial_relationship": "BELOW", "detected": False},
         "dates": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Mfg / Pkd Date", "spatial_relationship": "INLINE", "detected": False},
+        "mfg_date": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Date of Manufacture", "spatial_relationship": "INLINE", "detected": False},
+        "expiry_date": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Expiry / Best Before Date", "spatial_relationship": "INLINE", "detected": False},
         "consumer_care": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Consumer Redressal", "spatial_relationship": "INLINE", "detected": False},
         "country_of_origin": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Country of Origin", "spatial_relationship": "INLINE", "detected": False},
-        "batch_lot_number": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Batch / Lot No", "spatial_relationship": "INLINE", "detected": False}
+        "batch_lot_number": {"value": "Not detected", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Batch / Lot No", "spatial_relationship": "INLINE", "detected": False},
+        "fssai_licence": {"value": "Not Applicable", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Licence / FSSAI / Reg No", "spatial_relationship": "INLINE", "detected": False},
+        "warnings": {"value": "Not Applicable", "raw_val": None, "confidence": 0.0, "side": "back", "bbox_norm": [0.1, 0.1, 0.3, 0.9], "heading": "Mandatory Warnings", "spatial_relationship": "INLINE", "detected": False}
     }
 
     # Normalize sides order for optimal statutory search priority:
@@ -518,6 +525,79 @@ def extract_declarations_from_multi_side(
                     break
 
         # =========================================================================
+        # 8b. PACKER & IMPORTER IDENTITIES
+        # =========================================================================
+        if not extracted["packer"]["detected"]:
+            for item in enriched_dets:
+                t = item["text"]
+                if re.search(r"\b(packed\s*by|packer|pkd\s*by)\b", t, re.IGNORECASE):
+                    extracted["packer"] = {
+                        "value": t.strip(),
+                        "raw_val": t.strip(),
+                        "confidence": item["confidence"],
+                        "side": side,
+                        "bbox_norm": item["bbox_norm"],
+                        "heading": "Packer Identity",
+                        "spatial_relationship": "INLINE",
+                        "detected": True
+                    }
+                    break
+
+        if not extracted["importer"]["detected"]:
+            for item in enriched_dets:
+                t = item["text"]
+                if re.search(r"\b(imported\s*by|importer)\b", t, re.IGNORECASE):
+                    extracted["importer"] = {
+                        "value": t.strip(),
+                        "raw_val": t.strip(),
+                        "confidence": item["confidence"],
+                        "side": side,
+                        "bbox_norm": item["bbox_norm"],
+                        "heading": "Importer Identity",
+                        "spatial_relationship": "INLINE",
+                        "detected": True
+                    }
+                    break
+
+        # =========================================================================
+        # 8c. STATUTORY LICENCE / FSSAI & MANDATORY WARNINGS
+        # =========================================================================
+        if not extracted["fssai_licence"]["detected"]:
+            for item in enriched_dets:
+                t = item["text"]
+                fssai_m = re.search(r"\b(?:fssai|lic\.?\s*no\.?|licence\s*no\.?)\s*[:.]?\s*([0-9]{14})\b", t, re.IGNORECASE)
+                if not fssai_m:
+                    fssai_m = re.search(r"\b([0-9]{14})\b", t)
+                if fssai_m:
+                    extracted["fssai_licence"] = {
+                        "value": f"FSSAI Lic. No. {fssai_m.group(1)}",
+                        "raw_val": fssai_m.group(1),
+                        "confidence": item["confidence"],
+                        "side": side,
+                        "bbox_norm": item["bbox_norm"],
+                        "heading": "Statutory FSSAI Licence",
+                        "spatial_relationship": "INLINE",
+                        "detected": True
+                    }
+                    break
+
+        if not extracted["warnings"]["detected"]:
+            for item in enriched_dets:
+                t = item["text"]
+                if any(w in t.lower() for w in ["contains added", "not for medicinal use", "allergen", "warning:", "keep out of reach", "caution:"]):
+                    extracted["warnings"] = {
+                        "value": t.strip(),
+                        "raw_val": t.strip(),
+                        "confidence": item["confidence"],
+                        "side": side,
+                        "bbox_norm": item["bbox_norm"],
+                        "heading": "Mandatory Warning / Advisory",
+                        "spatial_relationship": "INLINE",
+                        "detected": True
+                    }
+                    break
+
+        # =========================================================================
         # 9. PRODUCT NAME & BRAND (Primary Display Panel - Front View Analysis)
         # =========================================================================
         # Exclude legal, nutritional boilerplate, and mobile UI / status bar text
@@ -676,6 +756,33 @@ def extract_declarations_from_multi_side(
         except Exception:
             pass
 
+    # Variant / Flavour / Size Extraction:
+    # Detects package-specific variants (e.g. Gold, Topical Solution 5%, Zero Sugar, Classic)
+    if not extracted["variant"]["detected"] and extracted["product_name"]["detected"]:
+        p_name_val = extracted["product_name"]["value"]
+        variant_cands = ["gold", "classic", "premium", "topical solution", "extra virgin", "zero sugar", "5%", "10%", "diet", "almond", "butter", "masala", "salted", "sugar free"]
+        for vk in variant_cands:
+            if re.search(r'\b' + re.escape(vk) + r'\b', p_name_val, re.IGNORECASE):
+                extracted["variant"] = {
+                    "value": vk.title(),
+                    "raw_val": vk.title(),
+                    "confidence": 0.90,
+                    "side": extracted["product_name"]["side"],
+                    "bbox_norm": extracted["product_name"]["bbox_norm"],
+                    "heading": "Product Variant",
+                    "spatial_relationship": "PDP_INLINE",
+                    "detected": True
+                }
+                break
+
+    # Date Splitting: Distinguish Date of Manufacture vs Expiry Date
+    if extracted["dates"]["detected"]:
+        d_val = extracted["dates"]["value"]
+        if re.search(r"\b(mfg|pkd|mfd|packed)\b", d_val, re.IGNORECASE):
+            extracted["mfg_date"] = {**extracted["dates"], "heading": "Date of Manufacture"}
+        if re.search(r"\b(exp|expiry|best\s*before|use\s*by)\b", d_val, re.IGNORECASE):
+            extracted["expiry_date"] = {**extracted["dates"], "heading": "Expiry / Best Before"}
+
     # Derived Unit Sale Price (USP): If MRP and Net Qty detected, mathematically compute USP per Rule 6(1)(e)
     if not extracted["unit_sale_price"]["detected"] and extracted["mrp"]["detected"] and extracted["net_quantity"]["detected"]:
         try:
@@ -700,10 +807,42 @@ def extract_declarations_from_multi_side(
         except Exception:
             pass
 
-    # Final fallback normalization: If any declaration not detected, mark clearly without hallucinating
+    # Cross-View Verification (Part 18):
+    # Compare declarations detected across multiple package sides.
+    # If contradictory values are detected for the same field across sides, flag with Needs Verification!
+    for f_key in ["mrp", "net_quantity"]:
+        side_values = {}
+        for side_k, dets in side_detections.items():
+            for d in dets:
+                t = d.get("text", "")
+                tl = t.lower()
+                if f_key == "mrp":
+                    # Must be an explicit MRP declaration, not USP (/g, /ml, /unit) or discounts
+                    if "mrp" in tl and not any(u in tl for u in ["/g", "/gm", "/ml", "/kg", "usp", "unit sale price"]):
+                        m = re.search(r"(?:₹|rs\.?)\s*([0-9]+(?:\.[0-9]+)?)", t, re.IGNORECASE)
+                        if m:
+                            side_values[side_k] = float(m.group(1))
+                elif f_key == "net_quantity":
+                    if any(k in tl for k in ["net wt", "net weight", "net qty", "net quantity", "net:"]):
+                        m = re.search(r"\b([0-9]+(?:\.[0-9]+)?\s*(?:kg|g|gm|gms|ml|l|ltr))\b", t, re.IGNORECASE)
+                        if m:
+                            side_values[side_k] = m.group(1).lower().replace(" ", "")
+
+        # Only if multiple distinct sides have explicit declarations with DIFFERENT values
+        if len(set(side_values.values())) > 1:
+            extracted[f_key]["value"] = "Conflicting information detected — Needs Verification."
+            extracted[f_key]["confidence"] = 0.50
+            extracted[f_key]["spatial_relationship"] = "CONFLICTING_CROSS_VIEW"
+            extracted[f_key]["detected"] = True
+
+    # Final fallback normalization per Part 17:
+    # Not Applicable, Not Detected, Unreadable, Needs Verification
     for k, v in extracted.items():
         if not v["detected"]:
-            v["value"] = "Not detected"
+            if k in ["importer", "packer", "warnings", "variant", "fssai_licence"]:
+                v["value"] = "Not Applicable"
+            else:
+                v["value"] = "Not detected"
             v["raw_val"] = None
             v["confidence"] = 0.0
 

@@ -94,6 +94,11 @@ class Inspection(Base):
     officer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     product_name = Column(String(200), nullable=False)
+    brand = Column(String(120), nullable=True)
+    variant = Column(String(120), nullable=True)
+    mrp = Column(String(50), nullable=True)
+    net_quantity = Column(String(50), nullable=True)
+    source = Column(String(20), default="CAMERA")  # CAMERA or UPLOAD
     
     status = Column(String(30), default="PENDING_VERIFICATION", index=True)  # COMPLIANT, NON_COMPLIANT, PENDING_VERIFICATION
     pass_count = Column(Integer, default=0)
@@ -127,8 +132,15 @@ class InspectionImage(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     inspection_id = Column(Integer, ForeignKey("inspections.id"), nullable=False)
-    side = Column(String(20), nullable=False)  # front, back, side
+    side = Column(String(20), nullable=False)  # front, back, right_side, left_side
+    view_type = Column(String(20), nullable=True)
     image_path = Column(String(255), nullable=False)
+    source = Column(String(20), default="CAMERA")  # CAMERA or UPLOAD
+    mime_type = Column(String(50), default="image/jpeg")
+    file_size = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    processing_status = Column(String(30), default="PROCESSED")
     quality_score = Column(Float, default=1.0)
     is_accepted = Column(Boolean, default=True)
     quality_notes = Column(String(255), nullable=True)

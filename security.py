@@ -24,8 +24,8 @@ COMMON_PASSWORDS = {
 }
 
 def hash_password(password: str) -> str:
-    """Hash password using bcrypt with salt."""
-    salt = bcrypt.gensalt(rounds=12)
+    """Hash password using bcrypt with salt (rounds=10 standard for responsive interactive auth)."""
+    salt = bcrypt.gensalt(rounds=10)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

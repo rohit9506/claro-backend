@@ -114,7 +114,7 @@ def test_rule_engine():
         "consumer_care": {"value": "care@haldirams.com", "confidence": 0.93, "detected": True, "side": "back"},
         "country_of_origin": {"value": "India", "confidence": 0.95, "detected": True, "side": "front"}
     }
-    validations, overall_status, pass_c, fail_c, review_c = evaluate_legal_metrology_rules(mock_extracted, [])
+    validations, overall_status, pass_c, fail_c, review_c, correction_guidance = evaluate_legal_metrology_rules(mock_extracted, [])
     assert overall_status == "COMPLIANT"
     assert pass_c >= 7
     assert fail_c == 0

@@ -29,9 +29,34 @@ def init_database():
     
     # Auto-migrate any newly added columns for SQLite
     with engine.connect() as conn:
-        for col in ["right_image", "left_image"]:
+        inspection_cols = [
+            ("right_image", "VARCHAR(255)"),
+            ("left_image", "VARCHAR(255)"),
+            ("brand", "VARCHAR(120)"),
+            ("variant", "VARCHAR(120)"),
+            ("mrp", "VARCHAR(50)"),
+            ("net_quantity", "VARCHAR(50)"),
+            ("source", "VARCHAR(20) DEFAULT 'CAMERA'")
+        ]
+        for col, col_type in inspection_cols:
             try:
-                conn.execute(text(f"ALTER TABLE inspections ADD COLUMN {col} VARCHAR(255)"))
+                conn.execute(text(f"ALTER TABLE inspections ADD COLUMN {col} {col_type}"))
+                conn.commit()
+            except Exception:
+                pass
+
+        image_cols = [
+            ("view_type", "VARCHAR(20)"),
+            ("source", "VARCHAR(20) DEFAULT 'CAMERA'"),
+            ("mime_type", "VARCHAR(50) DEFAULT 'image/jpeg'"),
+            ("file_size", "INTEGER"),
+            ("width", "INTEGER"),
+            ("height", "INTEGER"),
+            ("processing_status", "VARCHAR(30) DEFAULT 'PROCESSED'")
+        ]
+        for col, col_type in image_cols:
+            try:
+                conn.execute(text(f"ALTER TABLE inspection_images ADD COLUMN {col} {col_type}"))
                 conn.commit()
             except Exception:
                 pass
@@ -95,6 +120,40 @@ def init_database():
                 email_verified_at=utc_now()
             )
             db.add(officer)
+            db.commit()
+
+        # 2b. Seed Default Consumer Account for Demo/Testing
+        consumer = db.query(User).filter(User.username == "pooja_sharma").first()
+        if not consumer:
+            consumer = User(
+                full_name="Pooja Sharma",
+                username="pooja_sharma",
+                email="pooja.sharma@example.com",
+                password_hash=hash_password("Consumer@2026!SecurePass"),
+                role="ROLE_USER",
+                is_active=True,
+                is_temporary_password=False,
+                email_verified=True,
+                email_verified_at=utc_now()
+            )
+            db.add(consumer)
+            db.commit()
+
+        # Ensure standard Admin account exists with Admin@123
+        standard_admin = db.query(User).filter(User.username == "admin").first()
+        if not standard_admin:
+            standard_admin = User(
+                full_name="Chief Legal Metrology Administrator",
+                username="admin",
+                email="admin@claro.gov.in",
+                password_hash=hash_password("Admin@123"),
+                role="ROLE_ADMIN",
+                is_active=True,
+                is_temporary_password=False,
+                email_verified=True,
+                email_verified_at=utc_now()
+            )
+            db.add(standard_admin)
             db.commit()
 
         # 3. Seed Standard Legal Metrology Rules (Packaged Commodities Rules 2011)
