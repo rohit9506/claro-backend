@@ -54,6 +54,19 @@ class ResetPasswordRequest(BaseModel):
 class PasswordCheckRequest(BaseModel):
     password: str
 
+class VerifyGmailRequest(BaseModel):
+    email: str
+
+class VerifyAccountRequest(BaseModel):
+    email: str
+    username: str
+
+class DirectResetPasswordRequest(BaseModel):
+    email: str
+    username: Optional[str] = None
+    new_password: str
+    confirm_password: str
+
 # 1. First-Time Setup Status
 @router.get("/setup-status")
 def get_setup_status():
@@ -363,6 +376,91 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     )
 
     return {"success": True, "message": "Your password has been reset successfully. You can now log in."}
+
+# 9b. Verify Account Credentials (Both Gmail and Username must match same registered account)
+@router.post("/verify-account")
+def verify_account(req: VerifyAccountRequest, db: Session = Depends(get_db)):
+    email_clean = req.email.strip().lower()
+    username_clean = req.username.strip().lower()
+    from sqlalchemy import func
+    user = db.query(User).filter(
+        func.lower(User.email) == email_clean,
+        func.lower(User.username) == username_clean
+    ).first()
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="The Gmail address and username do not match a registered account."
+        )
+    return {
+        "success": True,
+        "exists": True,
+        "email": email_clean,
+        "username": username_clean,
+        "message": "Account verified successfully."
+    }
+
+# 9c. Legacy Verify Gmail endpoint (kept for backward compatibility)
+@router.post("/verify-gmail")
+def verify_gmail(req: VerifyGmailRequest, db: Session = Depends(get_db)):
+    email_clean = req.email.strip().lower()
+    from sqlalchemy import func
+    user = db.query(User).filter(func.lower(User.email) == email_clean).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="The Gmail address and username do not match a registered account."
+        )
+    return {
+        "success": True,
+        "exists": True,
+        "email": email_clean,
+        "message": "Gmail address verified."
+    }
+
+# 9d. Direct Reset Password (Verifies both credentials match, updates hashed password)
+@router.post("/reset-password-direct")
+def reset_password_direct(req: DirectResetPasswordRequest, db: Session = Depends(get_db)):
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    email_clean = req.email.strip().lower()
+    username_clean = req.username.strip().lower() if req.username else None
+    from sqlalchemy import func
+    
+    query = db.query(User).filter(func.lower(User.email) == email_clean)
+    if username_clean:
+        query = query.filter(func.lower(User.username) == username_clean)
+    user = query.first()
+
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="The Gmail address and username do not match a registered account."
+        )
+
+    pwd_eval = evaluate_password_strength(req.new_password)
+    if not pwd_eval["is_valid"]:
+        raise HTTPException(status_code=400, detail=pwd_eval["errors"][0])
+
+    user.password_hash = hash_password(req.new_password.strip())
+    user.is_temporary_password = False
+    user.password_reset_token_hash = None
+    user.password_reset_token_expires_at = None
+    user.updated_at = utc_now()
+    db.commit()
+
+    log_audit(
+        db, actor_id=user.id, actor_name=user.full_name, actor_role=user.role,
+        action="PASSWORD_RESET_DIRECT", target_type="USER", target_id=str(user.id),
+        details={"email": email_clean, "username": user.username}
+    )
+
+    return {
+        "success": True,
+        "message": "Password changed successfully. You can now log in with your new password."
+    }
+
 
 # 10. Get Current Profile
 @router.get("/me")

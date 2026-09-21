@@ -16,6 +16,18 @@ def evaluate_legal_metrology_rules(
 
     # Rule mapping definitions with legal clauses
     rule_definitions = {
+        "product_name": {
+            "name": "Generic Product Name",
+            "clause": "Rule 6(1)(b)",
+            "requirement": "Declaration of the common or generic name of the commodity on the principal display panel.",
+            "evaluator": lambda d: evaluate_product_name(d)
+        },
+        "brand": {
+            "name": "Brand / Trade Name",
+            "clause": "Rule 6(1)(b)",
+            "requirement": "Clear declaration of the brand name or commercial trademark on the packaging.",
+            "evaluator": lambda d: evaluate_brand(d)
+        },
         "mrp": {
             "name": "Maximum Retail Price (MRP)",
             "clause": "Rule 6(1)(da)",
@@ -73,7 +85,7 @@ def evaluate_legal_metrology_rules(
     }
 
     for key, spec in rule_definitions.items():
-        if key == "batch_lot_number" and key not in extracted_declarations:
+        if key in ["product_name", "brand", "batch_lot_number"] and key not in extracted_declarations:
             continue
         data = extracted_declarations.get(key, {})
         status, reason, confidence = spec["evaluator"](data)
@@ -115,13 +127,31 @@ def evaluate_legal_metrology_rules(
 
     return validations, overall_status, pass_count, fail_count, review_count
 
+def evaluate_product_name(data: dict) -> Tuple[str, str, float]:
+    if not data.get("detected"):
+        return "FAIL", "Mandatory common or generic name of the commodity missing under Rule 6(1)(b).", 0.90
+    val = (data.get("value") or "").strip()
+    conf = data.get("confidence", 0.9)
+    if len(val) >= 2 and val.lower() not in ["not detected", "packaged commodity", "packaged retail commodity"]:
+        return "PASS", f"Generic commodity name identified as '{val}'.", conf
+    return "REVIEW", "Product name requires human confirmation.", 0.65
+
+def evaluate_brand(data: dict) -> Tuple[str, str, float]:
+    if not data.get("detected"):
+        return "REVIEW", "Brand name declaration not explicitly detected. Verify if unbranded/generic.", 0.70
+    val = (data.get("value") or "").strip()
+    conf = data.get("confidence", 0.9)
+    if len(val) >= 2 and val.lower() not in ["not detected"]:
+        return "PASS", f"Brand identifier declared as '{val}'.", conf
+    return "REVIEW", "Brand identifier format requires review.", 0.65
+
 def evaluate_mrp(data: dict) -> Tuple[str, str, float]:
     if not data.get("detected"):
         return "FAIL", "Mandatory declaration of Maximum Retail Price (MRP) missing from package labels.", 0.95
     val = data.get("value", "")
     conf = data.get("confidence", 0.9)
-    if "₹" in val or "rs" in val.lower() or "mrp" in val.lower():
-        return "PASS", "MRP declaration present with valid currency indicator.", conf
+    if "₹" in val or "rs" in val.lower() or "mrp" in val.lower() or any(c.isdigit() for c in val):
+        return "PASS", f"MRP declaration present with valid currency indicator: '{val}'.", conf
     return "REVIEW", "Price indicator format requires human inspection.", 0.65
 
 def evaluate_net_quantity(data: dict) -> Tuple[str, str, float]:

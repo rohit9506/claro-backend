@@ -450,6 +450,59 @@ def test_field_extractor_2d_spatial_and_disambiguation():
     assert results["dates"]["detected"] is True
     assert "09/2026" in results["dates"]["value"]
 
+def test_verify_account_and_direct_reset_password():
+    # 1. Test verify-account for non-existent or mismatched account
+    res_not_found = client.post("/auth/verify-account", json={
+        "email": "nonexistent_email_12345@gmail.com",
+        "username": "nonexistent_user"
+    })
+    assert res_not_found.status_code == 400
+    assert "The Gmail address and username do not match a registered account." in res_not_found.json()["detail"]
+
+    # 2. Test verify-account for mismatched username and email
+    res_mismatch = client.post("/auth/verify-account", json={
+        "email": "pooja.sharma@example.com",
+        "username": "wrong_username"
+    })
+    assert res_mismatch.status_code == 400
+    assert "The Gmail address and username do not match a registered account." in res_mismatch.json()["detail"]
+
+    # 3. Test verify-account for existing matched user (pooja.sharma@example.com & pooja_sharma)
+    res_found = client.post("/auth/verify-account", json={
+        "email": "pooja.sharma@example.com",
+        "username": "pooja_sharma"
+    })
+    assert res_found.status_code == 200
+    assert res_found.json()["exists"] is True
+
+    # 4. Test direct reset with mismatched passwords
+    res_pwd_mismatch = client.post("/auth/reset-password-direct", json={
+        "email": "pooja.sharma@example.com",
+        "username": "pooja_sharma",
+        "new_password": "NewSecurePassword@2026!",
+        "confirm_password": "DifferentPassword@2026!"
+    })
+    assert res_pwd_mismatch.status_code == 400
+    assert "Passwords do not match" in res_pwd_mismatch.json()["detail"]
+
+    # 5. Test direct reset with valid password
+    res_reset = client.post("/auth/reset-password-direct", json={
+        "email": "pooja.sharma@example.com",
+        "username": "pooja_sharma",
+        "new_password": "NewResetPassword@2026!",
+        "confirm_password": "NewResetPassword@2026!"
+    })
+    assert res_reset.status_code == 200
+    assert "Password changed successfully" in res_reset.json()["message"]
+
+    # 6. Verify login with newly reset password succeeds
+    login_new = client.post("/auth/login", json={
+        "username_or_email": "pooja_sharma",
+        "password": "NewResetPassword@2026!"
+    })
+    assert login_new.status_code == 200
+    assert "access_token" in login_new.json()
+
 
 
 

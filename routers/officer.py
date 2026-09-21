@@ -114,10 +114,12 @@ async def analyze_product(
     await process_side("front", front_image)
     if back_image:
         await process_side("back", back_image)
-    if side_image:
-        await process_side("side", side_image)
     if right_image:
         await process_side("right_side", right_image)
+        images_saved["side"] = images_saved["right_side"]
+        ocr_side_detections["side"] = ocr_side_detections["right_side"]
+    elif side_image:
+        await process_side("side", side_image)
     if left_image:
         await process_side("left_side", left_image)
 
@@ -128,15 +130,19 @@ async def analyze_product(
     prod_ident = identify_product_multi_signal(
         image_paths={k: str(UPLOAD_DIR / f"insp_{session_id}_{k}.jpg") for k in images_saved.keys()},
         ocr_side_detections=ocr_side_detections,
+        extracted_declarations=extracted_declarations,
         db=db
     )
 
-    # If product name wasn't explicitly given by user, use identified or extracted name if available
-    final_product_name = product_name
-    if prod_ident.get("matched_product") and (not final_product_name or final_product_name in ["Packaged Retail Commodity", "Packaged Commodity"]):
-        final_product_name = prod_ident["matched_product"].get("name", final_product_name)
-    elif (not final_product_name or final_product_name == "Packaged Retail Commodity") and extracted_declarations.get("product_name", {}).get("detected"):
+    # 1c. Product Identity Resolution: Physical package is Primary Source of Truth
+    if prod_ident.get("matched_product"):
+        final_product_name = prod_ident["matched_product"].get("name") or "Product could not be confidently identified."
+    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""]:
         final_product_name = extracted_declarations["product_name"]["value"]
+    elif product_name and product_name not in ["Packaged Retail Commodity", "Packaged Commodity", ""]:
+        final_product_name = product_name
+    else:
+        final_product_name = "Product could not be confidently identified."
 
     # 2. Query Active Rules from Database
     active_rules = db.query(Rule).filter(Rule.is_active == True).all()
@@ -146,9 +152,12 @@ async def analyze_product(
         extracted_declarations, active_rules
     )
 
-    # 4. Generate Unique Inspection Reference
-    count = db.query(Inspection).count() + 1
-    inspection_num = f"INSP-2026-{count:04d}"
+    if final_product_name == "Product could not be confidently identified." and overall_status == "COMPLIANT":
+        overall_status = "PENDING_VERIFICATION"
+        review_c += 1
+
+    # 4. Generate Unique Inspection Reference (Timestamp + UUID)
+    inspection_num = f"INSP-{utc_now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
     # 5. Persist to Centralized Database
     inspection = Inspection(
@@ -172,6 +181,18 @@ async def analyze_product(
     db.add(inspection)
     db.commit()
     db.refresh(inspection)
+
+    # Persist all individual captured images in InspectionImage table
+    for side_k, img_path in images_saved.items():
+        insp_img = InspectionImage(
+            inspection_id=inspection.id,
+            side=side_k,
+            image_path=img_path,
+            quality_score=1.0,
+            is_accepted=True,
+            quality_notes=f"Accepted during 4-side inspection scan ({side_k})"
+        )
+        db.add(insp_img)
 
     # Save Field Validations
     field_records = []
@@ -236,6 +257,7 @@ async def analyze_product(
 
     return {
         "success": True,
+        "id": inspection.id,
         "inspection_id": inspection.id,
         "inspection_number": inspection_num,
         "product_name": final_product_name,
@@ -243,6 +265,11 @@ async def analyze_product(
         "pass_count": pass_c,
         "fail_count": fail_c,
         "review_count": review_c,
+        "front_image": images_saved.get("front"),
+        "back_image": images_saved.get("back"),
+        "side_image": images_saved.get("side") or images_saved.get("right_side"),
+        "right_image": images_saved.get("right_side") or images_saved.get("right"),
+        "left_image": images_saved.get("left_side") or images_saved.get("left"),
         "images": images_saved,
         "product_identification": prod_ident,
         "validations": validations_res,

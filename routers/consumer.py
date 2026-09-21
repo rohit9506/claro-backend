@@ -135,11 +135,13 @@ async def consumer_scan(
     front_image: Optional[UploadFile] = File(None),
     back_image: Optional[UploadFile] = File(None),
     side_image: Optional[UploadFile] = File(None),
+    right_image: Optional[UploadFile] = File(None),
+    left_image: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),  # Backward compatibility
     db: Session = Depends(get_db)
 ):
     """
-    Consumer scanning - supports 3-sided photo capture (Front, Back, Side) or single capture.
+    Consumer scanning - supports 4-sided photo capture (Front, Back, Right Side, Left Side) or single capture.
     Performs multi-signal product identification (Barcode, Catalog visual match, OCR text match)
     and field extraction.
     """
@@ -171,18 +173,25 @@ async def consumer_scan(
     await save_and_ocr("front", front_image)
     if back_image:
         await save_and_ocr("back", back_image)
-    if side_image:
+    if right_image:
+        await save_and_ocr("right_side", right_image)
+        images_saved["side"] = images_saved["right_side"]
+        ocr_side_detections["side"] = ocr_side_detections["right_side"]
+    elif side_image:
         await save_and_ocr("side", side_image)
+    if left_image:
+        await save_and_ocr("left_side", left_image)
 
-    # Multi-Signal Product Identification
+    # 1. Extract Declarations
+    extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)
+
+    # 2. Multi-Signal Product Identification (Barcode + Catalog Visual Match + Physical Package OCR)
     prod_ident = identify_product_multi_signal(
         image_paths={k: str(UPLOAD_DIR / f"consumer_{session_id}_{k}.jpg") for k in images_saved.keys()},
         ocr_side_detections=ocr_side_detections,
+        extracted_declarations=extracted_declarations,
         db=db
     )
-
-    # Extract Declarations
-    extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)
 
     # Matched product details
     matched_prod_dict = prod_ident.get("matched_product")
@@ -198,17 +207,35 @@ async def consumer_scan(
             "avg_overall": round(avg_overall, 1)
         }
 
+    # Canonical product name resolution
+    if matched_prod_dict and matched_prod_dict.get("name"):
+        resolved_name = matched_prod_dict["name"]
+        verification_status = "Verified"
+    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""]:
+        resolved_name = extracted_declarations["product_name"]["value"]
+        verification_status = "Identified via Physical Package"
+    else:
+        resolved_name = "Product could not be confidently identified."
+        verification_status = "Needs Verification"
+
     return {
         "success": True,
         "status": prod_ident["status"],
         "matched": bool(matched_prod_dict),
         "product_id": matched_product_id,
-        "product_name": matched_prod_dict.get("name") if matched_prod_dict else extracted_declarations.get("product_name", {}).get("value", "Unidentified Commodity"),
+        "product_name": resolved_name,
+        "brand": (matched_prod_dict.get("brand") if matched_prod_dict else None) or extracted_declarations.get("brand", {}).get("value") or "Not confidently detected",
+        "verification_status": verification_status,
         "matched_product": matched_prod_dict,
         "candidates": prod_ident.get("candidates", []),
         "barcode_detected": prod_ident.get("barcode_detected"),
         "extracted_declarations": extracted_declarations,
         "community_stats": community_stats,
+        "front_image": images_saved.get("front"),
+        "back_image": images_saved.get("back"),
+        "right_image": images_saved.get("right_side") or images_saved.get("right"),
+        "left_image": images_saved.get("left_side") or images_saved.get("left"),
+        "side_image": images_saved.get("side") or images_saved.get("right_side"),
         "images": images_saved
     }
 

@@ -51,17 +51,32 @@ class OCRService:
             return []
 
         h, w = img.shape[:2]
+        max_dim = max(h, w)
+        scale = 1.0
+        if max_dim > 1280:
+            scale = 1280.0 / max_dim
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img_to_ocr = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            img_to_ocr = img
+
         results = []
 
         if OCRService._engine is not None:
             try:
-                ocr_out, _ = OCRService._engine(img)
+                ocr_out, _ = OCRService._engine(img_to_ocr)
                 if ocr_out:
                     for item in ocr_out:
                         # item format: [box_points, text, confidence]
                         box, text, score = item
-                        xs = [p[0] for p in box]
-                        ys = [p[1] for p in box]
+                        if scale != 1.0:
+                            box_orig = [[p[0] / scale, p[1] / scale] for p in box]
+                        else:
+                            box_orig = box
+
+                        xs = [p[0] for p in box_orig]
+                        ys = [p[1] for p in box_orig]
                         
                         xmin = max(0.0, min(xs) / w)
                         xmax = min(1.0, max(xs) / w)
@@ -71,7 +86,7 @@ class OCRService:
                         results.append({
                             "text": str(text).strip(),
                             "confidence": round(float(score), 3),
-                            "bbox_raw": box,
+                            "bbox_raw": box_orig,
                             "bbox_norm": [round(ymin, 4), round(xmin, 4), round(ymax, 4), round(xmax, 4)]
                         })
             except Exception as e:

@@ -209,7 +209,26 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
                 p = UPLOAD_DIR / filename
                 if p.exists() and p.is_file():
                     resolved_path = p
-            # 3. Direct or local filename
+                elif s.startswith("http://") or s.startswith("https://"):
+                    try:
+                        import urllib.request
+                        temp_p = UPLOAD_DIR / f"tmp_remote_{uuid.uuid4().hex[:8]}.jpg"
+                        urllib.request.urlretrieve(s, str(temp_p))
+                        if temp_p.exists() and temp_p.stat().st_size > 0:
+                            resolved_path = temp_p
+                    except Exception as http_err:
+                        print(f"Remote image download error: {http_err}")
+            # 3. Direct HTTP(S) URL
+            elif s.startswith("http://") or s.startswith("https://"):
+                try:
+                    import urllib.request
+                    temp_p = UPLOAD_DIR / f"tmp_remote_{uuid.uuid4().hex[:8]}.jpg"
+                    urllib.request.urlretrieve(s, str(temp_p))
+                    if temp_p.exists() and temp_p.stat().st_size > 0:
+                        resolved_path = temp_p
+                except Exception as http_err:
+                    print(f"Remote image download error: {http_err}")
+            # 4. Direct or local filename
             else:
                 p = Path(s)
                 if p.exists() and p.is_file():
@@ -337,7 +356,55 @@ def generate_inspection_pdf(inspection_data: dict) -> str:
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
     story.append(comp_table)
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
+
+    # 5b. Corrective Guidance / How to Correct Non-Compliance
+    non_compliant_items = [
+        v for v in inspection_data.get("validations", [])
+        if str(v.get("status", "")).upper() in ["FAIL", "REVIEW"]
+    ]
+
+    if non_compliant_items:
+        story.append(Paragraph("HOW TO CORRECT NON-COMPLIANCE / STATUTORY GUIDANCE", heading_style))
+        guidance_rules = {
+            "product_name": "Ensure the common or generic name of the commodity is clearly displayed on the Principal Display Panel (PDP) under Rule 6(1)(b).",
+            "brand": "Ensure brand identity or commercial trade name is clearly declared under Rule 6(1)(b).",
+            "mrp": "Ensure MRP is declared strictly as 'Maximum Retail Price ₹... (inclusive of all taxes)' on the PDP or statutory panel in clear, legible font.",
+            "net_quantity": "Declare Net Quantity in SI metric units (g, kg, ml, l) adhering to the minimum letter/numeral height specified in Schedule II based on package area.",
+            "unit_sale_price": "For packages containing more than 1 unit/kg/litre, clearly print Unit Sale Price rounded to 2 decimal places (e.g., ₹0.25 / g).",
+            "manufacturer": "Print full name and registered commercial entity of the manufacturer, packer, or importer.",
+            "complete_address": "Specify complete postal address of manufacturing/packing premises along with valid 6-digit PIN code.",
+            "dates": "Declare Month and Year of manufacture / packing in standard DD/MM/YYYY or MM/YYYY format.",
+            "consumer_care": "Provide name, address, telephone/toll-free number, and active email address of the consumer redressal officer under Rule 6(2).",
+            "country_of_origin": "State country of origin prominently for all imported or domestically packaged goods.",
+            "batch_lot_number": "Ensure batch, lot, or code number is clearly visible for product traceability."
+        }
+
+        guidance_rows = [[
+            Paragraph("<b>Deficient Declaration</b>", cell_bold),
+            Paragraph("<b>Statutory Corrective Action Required (PCR 2011)</b>", cell_bold)
+        ]]
+
+        for item in non_compliant_items:
+            fn = item.get("field_name", "").lower()
+            dn = item.get("display_name") or item.get("field_name")
+            remedy = guidance_rules.get(fn, f"Ensure mandatory statutory declaration for {dn} complies with PCR 2011 Rule 6 provisions.")
+            guidance_rows.append([
+                Paragraph(f"<font color='#DC2626'><b>{html.escape(str(dn))}</b></font>", cell_style),
+                Paragraph(html.escape(remedy), cell_style)
+            ])
+
+        guidance_table = Table(guidance_rows, colWidths=[160, 380])
+        guidance_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#FEF2F2")),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#FECACA")),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#FEE2E2")),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        story.append(KeepTogether(guidance_table))
+        story.append(Spacer(1, 8))
 
     # 6. Verification Sign-off block
     sign_off_data = [
