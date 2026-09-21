@@ -135,11 +135,21 @@ async def analyze_product(
     )
 
     # 1c. Product Identity Resolution: Physical package is Primary Source of Truth
-    if prod_ident.get("matched_product"):
-        final_product_name = prod_ident["matched_product"].get("name") or "Product could not be confidently identified."
-    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""]:
+    def is_filename(val: Optional[str]) -> bool:
+        if not val or not str(val).strip():
+            return True
+        v = str(val).strip().lower()
+        if any(v.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
+            return True
+        if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", v):
+            return True
+        return False
+
+    if prod_ident.get("matched_product") and not is_filename(prod_ident["matched_product"].get("name")):
+        final_product_name = prod_ident["matched_product"].get("name")
+    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""] and not is_filename(extracted_declarations["product_name"]["value"]):
         final_product_name = extracted_declarations["product_name"]["value"]
-    elif product_name and product_name not in ["Packaged Retail Commodity", "Packaged Commodity", ""]:
+    elif product_name and product_name not in ["Packaged Retail Commodity", "Packaged Commodity", ""] and not is_filename(product_name):
         final_product_name = product_name
     else:
         final_product_name = "Product could not be confidently identified."

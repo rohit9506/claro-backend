@@ -552,6 +552,11 @@ def extract_declarations_from_multi_side(
             symbols = sum(1 for c in tl if c in "%/\\_+=#@")
             if len(tl) > 3 and (symbols / len(tl)) > 0.12:
                 return True
+            # Reject image file names (e.g. web.jpg, front.png, img_1.jpg etc.)
+            if any(tl.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
+                return True
+            if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", tl):
+                return True
             return any(k in tl for k in [
                 "for external use", "keep out of reach", "store in a cool", "shake well"
             ])
@@ -610,8 +615,8 @@ def extract_declarations_from_multi_side(
                         # Normalize common OCR typos e.g. "Maitters", "Mcitters" -> "Matters"
                         b_text = re.sub(r"\b(maitters|mcitters|maters)\b", "Matters", b_text, flags=re.IGNORECASE)
                         b_val_clean = b_text.strip()
-                        if b_val_clean.islower():
-                            b_val_clean = b_val_clean.title()
+                        if b_val_clean.islower() or " " in b_val_clean:
+                            b_val_clean = " ".join(w.capitalize() if w.islower() else w for w in b_val_clean.split())
                         extracted["brand"] = {
                             "value": b_val_clean,
                             "raw_val": b_val_clean,
@@ -655,7 +660,7 @@ def extract_declarations_from_multi_side(
                         full_pdp_title = " ".join(it["text"].strip() for it in pdp_items)
 
                         # Normalize OCR typos in medical/personal care titles
-                        full_pdp_title = re.sub(r"\b(minoida|minaida)\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
+                        full_pdp_title = re.sub(r"\bmin[a-z]{2,6}d[a-z]{1,3}\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
                         full_pdp_title = re.sub(r"\b(heir|hoir)\b", "Hair", full_pdp_title, flags=re.IGNORECASE)
 
                         extracted["product_name"] = {

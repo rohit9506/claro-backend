@@ -261,13 +261,23 @@ def identify_product_multi_signal(
             "visual_signature": visual_sig
         }
 
+    def is_filename(val: Optional[str]) -> bool:
+        if not val or not str(val).strip():
+            return True
+        v = str(val).strip().lower()
+        if any(v.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
+            return True
+        if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", v):
+            return True
+        return False
+
     # 4. Package Direct Optical Identification (The physical package is the Primary Source of Truth)
     # If the package text was readable on the PDP, construct the exact identification from the package!
-    if pkg_name and pkg_name not in ["Not detected", "Product could not be confidently identified."]:
-        detected_brand_clean = pkg_brand if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] else "Brand on Package"
+    if pkg_name and pkg_name not in ["Not detected", "Product could not be confidently identified."] and not is_filename(pkg_name):
+        detected_brand_clean = pkg_brand if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else "Brand on Package"
         
         # Determine confidence based on presence of brand and name
-        confidence = 0.94 if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] else 0.85
+        confidence = 0.94 if pkg_brand and pkg_brand not in ["Not detected", "Not confidently detected"] and not is_filename(pkg_brand) else 0.85
 
         return {
             "status": "IDENTIFIED",

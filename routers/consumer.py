@@ -208,15 +208,28 @@ async def consumer_scan(
         }
 
     # Canonical product name resolution
-    if matched_prod_dict and matched_prod_dict.get("name"):
+    def is_filename(val: Optional[str]) -> bool:
+        if not val or not str(val).strip():
+            return True
+        v = str(val).strip().lower()
+        if any(v.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".pdf", ".svg"]):
+            return True
+        if re.search(r"^(web|front|back|side|image|img|photo|pic|screenshot|scan|upload)(\.\w+)?$", v):
+            return True
+        return False
+
+    if matched_prod_dict and matched_prod_dict.get("name") and not is_filename(matched_prod_dict.get("name")):
         resolved_name = matched_prod_dict["name"]
         verification_status = "Verified"
-    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""]:
+    elif extracted_declarations.get("product_name", {}).get("detected") and extracted_declarations["product_name"]["value"] not in ["Not detected", ""] and not is_filename(extracted_declarations["product_name"]["value"]):
         resolved_name = extracted_declarations["product_name"]["value"]
         verification_status = "Identified via Physical Package"
     else:
         resolved_name = "Product could not be confidently identified."
         verification_status = "Needs Verification"
+
+    raw_brand = (matched_prod_dict.get("brand") if matched_prod_dict else None) or extracted_declarations.get("brand", {}).get("value")
+    resolved_brand = raw_brand if raw_brand and not is_filename(raw_brand) else "Not confidently detected"
 
     return {
         "success": True,
@@ -224,7 +237,7 @@ async def consumer_scan(
         "matched": bool(matched_prod_dict),
         "product_id": matched_product_id,
         "product_name": resolved_name,
-        "brand": (matched_prod_dict.get("brand") if matched_prod_dict else None) or extracted_declarations.get("brand", {}).get("value") or "Not confidently detected",
+        "brand": resolved_brand,
         "verification_status": verification_status,
         "matched_product": matched_prod_dict,
         "candidates": prod_ident.get("candidates", []),
