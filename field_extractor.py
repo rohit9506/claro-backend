@@ -545,112 +545,114 @@ def extract_declarations_from_multi_side(
             ])
 
         # Try on Front first, then fallback to other sides if not found
-        if side == "front" or not extracted["product_name"]["detected"]:
-            candidates = [it for it in enriched_dets if not is_boilerplate(it["text"]) and len(it["text"]) >= 2]
+        try:
+            if side == "front" or not extracted["product_name"]["detected"]:
+                candidates = [it for it in enriched_dets if not is_boilerplate(it["text"]) and len(it["text"]) >= 2]
 
-            # Known Popular Indian Brands list for boost
-            known_brands = [
-                "man matters", "amul", "britannia", "parle", "nestle", "tata", "haldiram",
-                "dabur", "patanjali", "cadbury", "himalaya", "colgate", "dettol", "fortune",
-                "aashirvaad", "dove", "nivea", "head & shoulders", "garnier", "mamaearth",
-                "biotique", "mcaffeine", "the man company", "beardo", "ustraa", "itc",
-                "sunfeast", "lays", "kurkure", "maggi", "pepsodent", "sensodyne"
-            ]
-
-            # 1. Brand Detection
-            if not extracted["brand"]["detected"] and candidates:
-                detected_brand_cand = None
-
-                # Check for known brand in any candidate
-                for it in candidates:
-                    it_txt = it["text"].lower()
-                    for kb in known_brands:
-                        if kb in it_txt:
-                            detected_brand_cand = (kb.title(), it)
-                            break
-                    if detected_brand_cand:
-                        break
-
-                # If no known brand, look at upper PDP text (ymin <= 0.38)
-                if not detected_brand_cand:
-                    brand_cands = [it for it in candidates if it["props"] and it["props"]["ymin"] <= 0.38]
-                    if brand_cands:
-                        brand_cands.sort(key=lambda it: (it["props"]["ymin"], -it["props"]["area"]))
-                        top_brand_cand = brand_cands[0]
-                        b_val = top_brand_cand["text"].strip()
-
-                        # Check if next candidate directly below forms a 2-part brand (e.g. "man" + "matters")
-                        for sub_b in brand_cands[1:]:
-                            dy = sub_b["props"]["cy"] - top_brand_cand["props"]["cy"]
-                            dx = abs(sub_b["props"]["cx"] - top_brand_cand["props"]["cx"])
-                            if 0.01 <= dy <= 0.12 and dx <= 0.20:
-                                sub_txt = sub_b["text"].strip()
-                                if sub_txt.lower() not in b_val.lower():
-                                    b_val = f"{b_val} {sub_txt}"
-                                    break
-
-                        detected_brand_cand = (b_val, top_brand_cand)
-
-                if detected_brand_cand:
-                    b_text, b_item = detected_brand_cand
-                    # Normalize common OCR typos e.g. "Maitters" -> "Matters"
-                    b_text = re.sub(r"\bmaitters\b", "Matters", b_text, flags=re.IGNORECASE)
-                    extracted["brand"] = {
-                        "value": b_text.strip(),
-                        "raw_val": b_text.strip(),
-                        "confidence": b_item["confidence"],
-                        "side": side,
-                        "bbox_norm": b_item["bbox_norm"],
-                        "heading": "Brand Identity",
-                        "spatial_relationship": "PDP_TOP",
-                        "detected": True
-                    }
-
-            # 2. Product Name Detection (Prominent PDP Title)
-            if not extracted["product_name"]["detected"] and candidates:
-                brand_val = extracted["brand"].get("value", "").lower()
-                pdp_cands = [
-                    it for it in candidates
-                    if it["props"] and 0.08 <= it["props"]["cy"] <= 0.88
-                    and it["text"].strip().lower() not in brand_val
-                    and brand_val not in it["text"].strip().lower()
+                # Known Popular Indian Brands list for boost
+                known_brands = [
+                    "man matters", "amul", "britannia", "parle", "nestle", "tata", "haldiram",
+                    "dabur", "patanjali", "cadbury", "himalaya", "colgate", "dettol", "fortune",
+                    "aashirvaad", "dove", "nivea", "head & shoulders", "garnier", "mamaearth",
+                    "biotique", "mcaffeine", "the man company", "beardo", "ustraa", "itc",
+                    "sunfeast", "lays", "kurkure", "maggi", "pepsodent", "sensodyne"
                 ]
 
-                if pdp_cands:
-                    pdp_cands.sort(key=lambda it: it["props"]["area"] if it["props"] else 0, reverse=True)
-                    best_pdp = pdp_cands[0]
-                    pdp_items = [best_pdp]
+                # 1. Brand Detection
+                if not extracted["brand"]["detected"] and candidates:
+                    detected_brand_cand = None
 
-                    # Multi-line title collation: find lines immediately above or below connected to title
-                    if best_pdp["props"]:
-                        for other in candidates:
-                            if other == best_pdp or not other["props"]:
-                                continue
-                            if other["text"].strip().lower() in brand_val:
-                                continue
-                            dy = other["props"]["cy"] - best_pdp["props"]["cy"]
-                            dx = abs(other["props"]["cx"] - best_pdp["props"]["cx"])
-                            if -0.16 <= dy <= 0.18 and dx <= 0.25 and len(other["text"].strip()) >= 3:
-                                pdp_items.append(other)
+                    # Check for known brand in any candidate
+                    for it in candidates:
+                        it_txt = it["text"].lower()
+                        for kb in known_brands:
+                            if kb in it_txt:
+                                detected_brand_cand = (kb.title(), it)
+                                break
+                        if detected_brand_cand:
+                            break
 
-                    # Sort collected title items top-to-bottom
-                    pdp_items.sort(key=lambda it: it["props"]["cy"] if it["props"] else 0)
-                    full_pdp_title = " ".join(it["text"].strip() for it in pdp_items)
+                    # If no known brand, look at upper PDP text (ymin <= 0.38)
+                    if not detected_brand_cand:
+                        brand_cands = [it for it in candidates if it["props"] and it["props"]["ymin"] <= 0.38]
+                        if brand_cands:
+                            brand_cands.sort(key=lambda it: (it["props"]["ymin"], -it["props"]["area"]))
+                            top_brand_cand = brand_cands[0]
+                            b_val = top_brand_cand["text"].strip()
 
-                    # Normalize OCR typos in medical/personal care titles
-                    full_pdp_title = re.sub(r"\bminoida\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
-                    full_pdp_title = re.sub(r"\bheir\b", "Hair", full_pdp_title, flags=re.IGNORECASE)
+                            # Check if next candidate directly below forms a 2-part brand (e.g. "man" + "matters")
+                            for sub_b in brand_cands[1:]:
+                                dy = sub_b["props"]["cy"] - top_brand_cand["props"]["cy"]
+                                dx = abs(sub_b["props"]["cx"] - top_brand_cand["props"]["cx"])
+                                if 0.01 <= dy <= 0.12 and dx <= 0.20:
+                                    sub_txt = sub_b["text"].strip()
+                                    if sub_txt.lower() not in b_val.lower():
+                                        b_val = f"{b_val} {sub_txt}"
+                                        break
 
-                    extracted["product_name"] = {
-                        "value": full_pdp_title.strip(),
-                        "raw_val": full_pdp_title.strip(),
-                        "confidence": best_pdp["confidence"],
-                        "side": side,
-                        "bbox_norm": best_pdp["bbox_norm"],
-                        "heading": "Product Name (PDP)",
-                        "spatial_relationship": "PDP_CENTER",
-                        "detected": True
-                    }
+                            detected_brand_cand = (b_val, top_brand_cand)
+
+                    if detected_brand_cand:
+                        b_text, b_item = detected_brand_cand
+                        # Normalize common OCR typos e.g. "Maitters" -> "Matters"
+                        b_text = re.sub(r"\bmaitters\b", "Matters", b_text, flags=re.IGNORECASE)
+                        extracted["brand"] = {
+                            "value": b_text.strip(),
+                            "raw_val": b_text.strip(),
+                            "confidence": b_item["confidence"],
+                            "side": side,
+                            "bbox_norm": b_item["bbox_norm"],
+                            "heading": "Brand Identity",
+                            "spatial_relationship": "PDP_TOP",
+                            "detected": True
+                        }
+
+                # 2. Product Name Detection (Prominent PDP Title)
+                if not extracted["product_name"]["detected"] and candidates:
+                    brand_val = extracted["brand"].get("value", "").lower()
+                    pdp_cands = [
+                        it for it in candidates
+                        if it["props"] and 0.08 <= it["props"]["cy"] <= 0.88
+                        and it["text"].strip().lower() not in brand_val
+                        and brand_val not in it["text"].strip().lower()
+                    ]
+                    if pdp_cands:
+                        pdp_cands.sort(key=lambda it: it["props"]["area"] if it["props"] else 0, reverse=True)
+                        best_pdp = pdp_cands[0]
+                        pdp_items = [best_pdp]
+
+                        # Multi-line title collation: find lines immediately above or below connected to title
+                        if best_pdp["props"]:
+                            for other in candidates:
+                                if other == best_pdp or not other["props"]:
+                                    continue
+                                if other["text"].strip().lower() in brand_val:
+                                    continue
+                                dy = other["props"]["cy"] - best_pdp["props"]["cy"]
+                                dx = abs(other["props"]["cx"] - best_pdp["props"]["cx"])
+                                if -0.16 <= dy <= 0.18 and dx <= 0.25 and len(other["text"].strip()) >= 3:
+                                    pdp_items.append(other)
+
+                        # Sort collected title items top-to-bottom
+                        pdp_items.sort(key=lambda it: it["props"]["cy"] if it["props"] else 0)
+                        full_pdp_title = " ".join(it["text"].strip() for it in pdp_items)
+
+                        # Normalize OCR typos in medical/personal care titles
+                        full_pdp_title = re.sub(r"\bminoida\b", "Minoxidil", full_pdp_title, flags=re.IGNORECASE)
+                        full_pdp_title = re.sub(r"\bheir\b", "Hair", full_pdp_title, flags=re.IGNORECASE)
+
+                        extracted["product_name"] = {
+                            "value": full_pdp_title.strip(),
+                            "raw_val": full_pdp_title.strip(),
+                            "confidence": best_pdp["confidence"],
+                            "side": side,
+                            "bbox_norm": best_pdp["bbox_norm"],
+                            "heading": "Product Name (PDP)",
+                            "spatial_relationship": "PDP_CENTER",
+                            "detected": True
+                        }
+        except Exception:
+            pass
 
     # Derived Unit Sale Price (USP): If MRP and Net Qty detected, mathematically compute USP per Rule 6(1)(e)
     if not extracted["unit_sale_price"]["detected"] and extracted["mrp"]["detected"] and extracted["net_quantity"]["detected"]:
