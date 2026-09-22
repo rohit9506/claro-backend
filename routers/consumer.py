@@ -441,7 +441,8 @@ async def consumer_scan(
         "back_image": images_saved.get("back"),
         "right_image": images_saved.get("right_side"),
         "left_image": images_saved.get("left_side"),
-        "images": images_saved
+        "images": images_saved,
+        "ocr_detections": ocr_side_detections
     }
 
 # 3b. Download or View Consumer Inspection Report PDF

@@ -355,6 +355,7 @@ async def analyze_product(
         "right_image": images_saved.get("right_side"),
         "left_image": images_saved.get("left_side"),
         "images": images_saved,
+        "ocr_detections": ocr_side_detections,
         "created_at": inspection.created_at.isoformat(),
         "pdf_url": f"/officer/inspections/{inspection.id}/report/pdf"
     }
