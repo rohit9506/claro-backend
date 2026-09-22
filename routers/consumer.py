@@ -214,22 +214,13 @@ async def consumer_scan(
     save_tasks = [process_side(name, upload) for name, upload in available_uploads]
     await asyncio.gather(*save_tasks)
 
-    # Run OCR across available views using bounded 2-worker thread pool for 2x faster throughput
-    loop = asyncio.get_event_loop()
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _ocr_worker(s_name):
+    # Run OCR across available views sequentially for memory safety (~180MB RAM) and zero OpenMP thread contention
+    for s_name, _ in available_uploads:
         fp = UPLOAD_DIR / f"pkg_{scan_id}_{s_name}.jpg"
         if fp.exists():
-            return s_name, ocr_service.extract_text_with_boxes(str(fp))
-        return s_name, []
-
-    workers = min(2, len(available_uploads))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        ocr_futures = [loop.run_in_executor(executor, _ocr_worker, name) for name, _ in available_uploads]
-        ocr_results = await asyncio.gather(*ocr_futures)
-        for s_name, dets in ocr_results:
-            ocr_side_detections[s_name] = dets
+            ocr_side_detections[s_name] = ocr_service.extract_text_with_boxes(str(fp))
+        else:
+            ocr_side_detections[s_name] = []
 
     # 1. Multi-Side Declaration Aggregation
     extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)
