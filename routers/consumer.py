@@ -2,6 +2,7 @@ import os
 import re
 import json
 import uuid
+import time
 import datetime
 import asyncio
 from typing import Optional, List
@@ -208,11 +209,11 @@ async def consumer_scan(
             "height": h,
             "quality_score": quality_score
         }
-        return filepath
-
+    t_start = time.time()
     # Process file uploads and quality checks
     save_tasks = [process_side(name, upload) for name, upload in available_uploads]
     await asyncio.gather(*save_tasks)
+    t_after_save = time.time()
 
     # Run OCR across available views sequentially for memory safety (~180MB RAM) and zero OpenMP thread contention
     for s_name, _ in available_uploads:
@@ -221,6 +222,7 @@ async def consumer_scan(
             ocr_side_detections[s_name] = ocr_service.extract_text_with_boxes(str(fp))
         else:
             ocr_side_detections[s_name] = []
+    t_after_ocr = time.time()
 
     # 1. Multi-Side Declaration Aggregation
     extracted_declarations = extract_declarations_from_multi_side(ocr_side_detections)
@@ -232,6 +234,7 @@ async def consumer_scan(
         extracted_declarations=extracted_declarations,
         db=db
     )
+    t_after_ident = time.time()
 
     matched_p = prod_ident.get("matched_product")
     matched_product_id = matched_p.get("id") if matched_p else None
@@ -268,6 +271,8 @@ async def consumer_scan(
     validations_res, overall_status, pass_c, fail_c, review_c, correction_guidance = evaluate_legal_metrology_rules(
         extracted_declarations, active_rules
     )
+
+    t_after_rules = time.time()
 
     if final_product_name == "Product could not be confidently identified." and overall_status == "COMPLIANT":
         overall_status = "PENDING_VERIFICATION"
@@ -350,6 +355,7 @@ async def consumer_scan(
         db.add(ocr_rec)
 
     db.commit()
+    t_after_db = time.time()
 
     # 5. Generate Official Digital Inspection Report PDF
     pdf_payload = {
@@ -380,6 +386,7 @@ async def consumer_scan(
         generate_inspection_pdf(pdf_payload)
     except Exception as pdf_err:
         print(f"[WARN] Consumer PDF generation deferred: {pdf_err}")
+    t_after_pdf = time.time()
 
     # Community reviews/stats if product is in catalog
     community_stats = None
@@ -396,6 +403,15 @@ async def consumer_scan(
         "scan_id": scan_id,
         "inspection_id": inspection.id,
         "inspection_number": scan_id,
+        "timing_breakdown": {
+            "save_ms": round((t_after_save - t_start) * 1000),
+            "ocr_ms": round((t_after_ocr - t_after_save) * 1000),
+            "ident_ms": round((t_after_ident - t_after_ocr) * 1000),
+            "rules_ms": round((t_after_rules - t_after_ident) * 1000),
+            "db_ms": round((t_after_db - t_after_rules) * 1000),
+            "pdf_ms": round((t_after_pdf - t_after_db) * 1000),
+            "total_ms": round((t_after_pdf - t_start) * 1000)
+        },
         "status": overall_status,
         "overall_status": overall_status,
         "product_id": matched_product_id,
