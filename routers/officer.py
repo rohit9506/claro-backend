@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional, List
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -81,6 +81,7 @@ async def analyze_product(
     product_name: Optional[str] = Form(None),
     location: Optional[str] = Form("Field Inspection Premise"),
     officer_notes: Optional[str] = Form("Standard first-level Legal Metrology package audit."),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(require_role("ROLE_OFFICER", "ROLE_ADMIN")),
     db: Session = Depends(get_db)
 ):
@@ -313,10 +314,13 @@ async def analyze_product(
         "left_image": images_saved.get("left_side"),
         "images": images_saved
     }
-    try:
-        generate_inspection_pdf(pdf_payload)
-    except Exception as pdf_err:
-        print(f"[WARN] PDF generation deferred: {pdf_err}")
+    if background_tasks:
+        background_tasks.add_task(generate_inspection_pdf, pdf_payload)
+    else:
+        try:
+            generate_inspection_pdf(pdf_payload)
+        except Exception as pdf_err:
+            print(f"[WARN] PDF generation deferred: {pdf_err}")
 
     # Audit log
     log_audit(

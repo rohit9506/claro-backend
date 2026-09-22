@@ -177,9 +177,9 @@ def check_and_enhance_image(image_path: str) -> Dict[str, Any]:
                 "message": "The captured package photo is too blurry to read declarations. Please hold the camera steady, ensure good lighting, and retake the photo."
             }
 
-        # If image has mild blur or low contrast, AUTOMATICALLY ENHANCE & FIX IT
-        needs_sharpening = laplacian_var < 85.0
-        needs_contrast = contrast < 35.0 or mean_brightness < 45.0 or mean_brightness > 215.0
+        # If image has true blur or extreme contrast issues, AUTOMATICALLY ENHANCE & FIX IT
+        needs_sharpening = laplacian_var < 45.0
+        needs_contrast = contrast < 22.0 or mean_brightness < 35.0 or mean_brightness > 230.0
 
         if needs_sharpening or needs_contrast:
             # 1. Unsharp Masking (high-frequency edge sharpening)

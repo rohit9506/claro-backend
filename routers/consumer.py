@@ -7,7 +7,7 @@ import datetime
 import asyncio
 from typing import Optional, List
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -147,6 +147,7 @@ async def consumer_scan(
     back_image: Optional[UploadFile] = File(None),
     right_image: Optional[UploadFile] = File(None),
     left_image: Optional[UploadFile] = File(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db)
 ):
     """
@@ -382,10 +383,13 @@ async def consumer_scan(
         "left_image": images_saved.get("left_side"),
         "images": images_saved
     }
-    try:
-        generate_inspection_pdf(pdf_payload)
-    except Exception as pdf_err:
-        print(f"[WARN] Consumer PDF generation deferred: {pdf_err}")
+    if background_tasks:
+        background_tasks.add_task(generate_inspection_pdf, pdf_payload)
+    else:
+        try:
+            generate_inspection_pdf(pdf_payload)
+        except Exception as pdf_err:
+            print(f"[WARN] Consumer PDF generation deferred: {pdf_err}")
     t_after_pdf = time.time()
 
     # Community reviews/stats if product is in catalog

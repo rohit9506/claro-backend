@@ -61,8 +61,8 @@ class OCRService:
         h, w = img.shape[:2]
         max_dim = max(h, w)
         scale = 1.0
-        if max_dim > 1280:
-            scale = 1280.0 / max_dim
+        if max_dim > 960:
+            scale = 960.0 / max_dim
             new_w = int(w * scale)
             new_h = int(h * scale)
             img_to_ocr = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
